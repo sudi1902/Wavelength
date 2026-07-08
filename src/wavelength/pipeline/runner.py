@@ -95,14 +95,19 @@ def _run(
     video_hash = ingest.file_sha256(video)
     existing = db.find_source(video_hash)
     if existing is not None:
-        if not force:
+        if existing["status"] == "failed":
+            # A crashed run isn't a result — always retry failed videos.
+            progress("Previous attempt failed; retrying")
+            db.delete_source(existing["id"])
+        elif not force:
             result.already_processed = True
             progress(
                 f"Already processed ({existing['effect_count']} effects); "
                 "use --force to re-extract"
             )
             return result
-        db.delete_source(existing["id"])
+        else:
+            db.delete_source(existing["id"])
 
     separator = separator or get_separator(settings, engine)
     if not separator.is_ready():

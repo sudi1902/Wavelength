@@ -56,6 +56,25 @@ def test_reprocessing_same_video_is_skipped(tmp_path, settings, three_event_audi
         assert len(db.list_effects()) == 3
 
 
+def test_failed_video_is_retried_without_force(tmp_path, settings, three_event_audio):
+    from wavelength.pipeline import ingest
+
+    video = make_video(tmp_path / "clip.mp4", three_event_audio)
+    # Simulate a previous crashed run: a 'failed' record for this exact video.
+    with LibraryDB(settings.db_path) as db:
+        source_id = db.add_source(
+            sha256=ingest.file_sha256(video),
+            original_path=str(video), filename=video.name,
+            duration_s=4.0, engine="bandit",
+        )
+        db.finish_source(source_id, effect_count=0, status="failed",
+                         error="MPS crash")
+
+    result = extract_video(video, settings)
+    assert not result.already_processed
+    assert result.effect_count == 3
+
+
 def test_no_archive_when_disabled(tmp_path, settings, three_event_audio):
     settings.archive_sources = False
     video = make_video(tmp_path / "clip.mp4", three_event_audio)
