@@ -17,9 +17,10 @@ import soundfile as sf
 from wavelength.config import Settings
 from wavelength.library.db import LibraryDB
 from wavelength.pipeline import ingest
-from wavelength.pipeline.clean import CleanedEffect, RejectReason, clean_segment
+from wavelength.pipeline.clean import CleanedEffect, Rejection, clean_segment
 from wavelength.pipeline.download import DownloadedVideo, download_video
-from wavelength.pipeline.segment import detect_segments
+from wavelength.pipeline.label import ClapLabeler, LabelingError, LabelResult
+from wavelength.pipeline.segment import detect_segments, gate_stats
 from wavelength.pipeline.separate import Separator, get_separator
 from wavelength.pipeline.store import archive_source, store_effect
 
@@ -32,9 +33,11 @@ class PipelineError(Exception):
 class ExtractionResult:
     video: Path
     effect_paths: list[Path] = field(default_factory=list)
+    quarantined_paths: list[Path] = field(default_factory=list)
     rejected: dict[str, int] = field(default_factory=dict)
     duplicates: int = 0
     already_processed: bool = False
+    labeled: bool = False
 
     @property
     def effect_count(self) -> int:
@@ -42,6 +45,14 @@ class ExtractionResult:
 
 
 Progress = Callable[[str], None]
+
+
+def _remove_source(db: LibraryDB, settings: Settings, source_id: int) -> None:
+    """Delete a source's DB rows AND its effect files (re-processing would
+    otherwise leave orphaned WAVs behind)."""
+    for row in db.effects_for_source(source_id):
+        (settings.library_dir / row["path"]).unlink(missing_ok=True)
+    db.delete_source(source_id)
 
 
 def extract_url(
@@ -55,6 +66,7 @@ def extract_url(
     progress: Progress = lambda msg: None,
     separator: Separator | None = None,
     db: LibraryDB | None = None,
+    debug: bool = False,
 ) -> ExtractionResult:
     """Download a video from a URL and run the full pipeline on it.
 
@@ -74,7 +86,7 @@ def extract_url(
                     "use --force to re-extract"
                 )
                 return result
-            db.delete_source(existing["id"])
+            _remove_source(db, settings, existing["id"])
 
         with tempfile.TemporaryDirectory(prefix="wavelength-dl-") as tmp:
             downloaded = download_video(
@@ -91,7 +103,7 @@ def extract_url(
                 engine=engine, force=force,
                 max_duration_override=max_duration_override,
                 progress=progress, separator=separator, db=db,
-                origin=downloaded,
+                origin=downloaded, debug=debug,
             )
     finally:
         if owns_db:
@@ -109,12 +121,14 @@ def extract_video(
     separator: Separator | None = None,
     db: LibraryDB | None = None,
     origin: DownloadedVideo | None = None,
+    debug: bool = False,
 ) -> ExtractionResult:
     """Run the full pipeline on one video.
 
     ``force`` re-processes a video that is already in the library.
     ``separator``/``db`` can be injected (batch runs reuse a loaded model).
     ``origin`` carries URL/title/uploader metadata for downloaded videos.
+    ``debug`` reports gate stats and per-segment keep/reject verdicts.
     """
     video = video.expanduser().resolve()
     ingest.require_ffmpeg()
@@ -126,10 +140,59 @@ def extract_video(
             video, settings, engine=engine, force=force,
             max_duration_override=max_duration_override,
             progress=progress, separator=separator, db=db, origin=origin,
+            debug=debug,
         )
     finally:
         if owns_db:
             db.close()
+
+
+def _label_effects(
+    cleaned: list[CleanedEffect],
+    settings: Settings,
+    result: ExtractionResult,
+    progress: Progress,
+    debug: bool,
+) -> list[LabelResult | None]:
+    """Batch-label cleaned effects via CLAP; degrade to unlabeled storage
+    when the labeler isn't set up or fails."""
+    if not cleaned or not settings.labeling.enabled:
+        return [None] * len(cleaned)
+    labeler = ClapLabeler(settings)
+    if not labeler.is_ready():
+        progress(
+            "Labeling skipped — set it up once with: wavelength setup clap"
+        )
+        return [None] * len(cleaned)
+
+    progress(f"Labeling {len(cleaned)} effect(s)")
+    with tempfile.TemporaryDirectory(prefix="wavelength-label-") as tmp:
+        paths = []
+        for i, effect in enumerate(cleaned):
+            p = Path(tmp) / f"{i:03d}.wav"
+            sf.write(p, effect.audio.T, effect.sample_rate, subtype="FLOAT")
+            paths.append(p)
+        try:
+            labels = labeler.label(paths)
+        except LabelingError as exc:
+            progress(f"Labeling failed; storing unlabeled. ({exc})")
+            return [None] * len(cleaned)
+
+    if len(labels) != len(cleaned):
+        progress("Labeler returned mismatched results; storing unlabeled")
+        return [None] * len(cleaned)
+    if debug:
+        for effect, label in zip(cleaned, labels):
+            verdict = (
+                f"quarantine ({label.quarantine_reason})"
+                if label.quarantine
+                else f"{label.label} {label.confidence:.2f}"
+            )
+            progress(
+                f"debug· {effect.start_in_source_s:6.2f}s → {verdict}"
+            )
+    result.labeled = True
+    return labels
 
 
 def _run(
@@ -137,6 +200,7 @@ def _run(
     max_duration_override: bool, progress: Progress,
     separator: Separator | None, db: LibraryDB,
     origin: DownloadedVideo | None = None,
+    debug: bool = False,
 ) -> ExtractionResult:
     result = ExtractionResult(video=video)
 
@@ -156,7 +220,7 @@ def _run(
         if existing["status"] == "failed":
             # A crashed run isn't a result — always retry failed videos.
             progress("Previous attempt failed; retrying")
-            db.delete_source(existing["id"])
+            _remove_source(db, settings, existing["id"])
         elif not force:
             result.already_processed = True
             progress(
@@ -165,7 +229,7 @@ def _run(
             )
             return result
         else:
-            db.delete_source(existing["id"])
+            _remove_source(db, settings, existing["id"])
 
     separator = separator or get_separator(settings, engine)
     if not separator.is_ready():
@@ -201,24 +265,53 @@ def _run(
         progress("Detecting sound events")
         segments = detect_segments(effects, stem_sr, settings.segmentation)
         progress(f"Found {len(segments)} candidate segment(s)")
+        if debug:
+            stats = gate_stats(effects, stem_sr, settings.segmentation)
+            progress(
+                f"debug· gate: noise floor {stats.noise_floor_db:.1f} dB, "
+                f"threshold {stats.threshold_db:.1f} dB, "
+                f"loudest frame {stats.peak_frame_db:.1f} dB"
+            )
 
-        # -- clean + store ----------------------------------------------------
-        index = 1
+        # -- clean --------------------------------------------------------
+        cleaned_effects: list[CleanedEffect] = []
         for segment in segments:
             cleaned = clean_segment(effects, stem_sr, segment, settings.cleaning)
-            if isinstance(cleaned, RejectReason):
-                result.rejected[cleaned.value] = (
-                    result.rejected.get(cleaned.value, 0) + 1
+            if isinstance(cleaned, Rejection):
+                result.rejected[cleaned.reason.value] = (
+                    result.rejected.get(cleaned.reason.value, 0) + 1
                 )
+                if debug:
+                    progress(
+                        f"debug· {segment.start_s:6.2f}-{segment.end_s:6.2f}s "
+                        f"rejected: {cleaned.reason.value} ({cleaned.detail})"
+                    )
                 continue
+            if debug:
+                progress(
+                    f"debug· {segment.start_s:6.2f}-{segment.end_s:6.2f}s "
+                    f"kept (peak {cleaned.peak_db:.1f} dB)"
+                )
+            cleaned_effects.append(cleaned)
+
+        # -- label --------------------------------------------------------
+        labels = _label_effects(cleaned_effects, settings, result, progress, debug)
+
+        # -- store --------------------------------------------------------
+        index = 1
+        for cleaned, label in zip(cleaned_effects, labels):
             stored = store_effect(
                 cleaned, settings=settings, db=db,
                 source_id=source_id, source_hash=video_hash, index=index,
+                label=label,
             )
             if stored is None:
                 result.duplicates += 1
                 continue
-            result.effect_paths.append(stored.path)
+            if stored.quarantined:
+                result.quarantined_paths.append(stored.path)
+            else:
+                result.effect_paths.append(stored.path)
             index += 1
 
         # -- archive ----------------------------------------------------------

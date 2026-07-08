@@ -1,7 +1,12 @@
 import numpy as np
 
 from wavelength.config import CleaningConfig
-from wavelength.pipeline.clean import CleanedEffect, RejectReason, clean_segment
+from wavelength.pipeline.clean import (
+    CleanedEffect,
+    Rejection,
+    RejectReason,
+    clean_segment,
+)
 from wavelength.pipeline.segment import Segment
 
 from conftest import SR, build_events_audio, tone_burst
@@ -30,20 +35,25 @@ def test_clean_produces_padded_faded_normalized_clip():
 def test_rejects_too_short():
     stem = _stem_with_event()
     result = clean_segment(stem, SR, Segment(1.0, 1.05))
-    assert result is RejectReason.TOO_SHORT
+    assert isinstance(result, Rejection)
+    assert result.reason is RejectReason.TOO_SHORT
+    assert "ms" in result.detail
 
 
 def test_rejects_too_quiet():
-    stem = _stem_with_event() * 0.005  # peak ~ -46 dBFS
+    stem = _stem_with_event() * 0.002  # peak ~ -54 dBFS, below -45 floor
     result = clean_segment(stem, SR, Segment(1.0, 1.5))
-    assert result is RejectReason.TOO_QUIET
+    assert isinstance(result, Rejection)
+    assert result.reason is RejectReason.TOO_QUIET
+    assert "dBFS" in result.detail
 
 
 def test_rejects_static_noise():
     rng = np.random.default_rng(7)
     stem = (rng.standard_normal(SR * 2) * 0.1).astype(np.float32)
     result = clean_segment(stem, SR, Segment(0.5, 1.5))
-    assert result is RejectReason.NOISE
+    assert isinstance(result, Rejection)
+    assert result.reason is RejectReason.NOISE
 
 
 def test_keeps_whoosh_like_enveloped_noise():

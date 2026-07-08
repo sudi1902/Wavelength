@@ -25,6 +25,12 @@ class RejectReason(str, Enum):
 
 
 @dataclass
+class Rejection:
+    reason: RejectReason
+    detail: str  # measured values vs threshold, for --debug output
+
+
+@dataclass
 class CleanedEffect:
     audio: np.ndarray  # (channels, samples) float32 in [-1, 1]
     sample_rate: int
@@ -76,29 +82,37 @@ def clean_segment(
     sr: int,
     segment: Segment,
     cfg: CleaningConfig | None = None,
-) -> CleanedEffect | RejectReason:
+) -> CleanedEffect | Rejection:
     """Extract one padded, faded, normalized effect clip from the effects stem.
 
-    Returns a CleanedEffect, or a RejectReason if the segment is junk.
-    ``stem`` may be mono (n,) or (channels, n).
+    Returns a CleanedEffect, or a Rejection (reason + measured values) if
+    the segment is junk. ``stem`` may be mono (n,) or (channels, n).
     """
     cfg = cfg or CleaningConfig()
     stem = _to_2d(stem)
     n_total = stem.shape[1]
 
     if segment.duration_s < cfg.min_duration_s:
-        return RejectReason.TOO_SHORT
+        return Rejection(
+            RejectReason.TOO_SHORT,
+            f"{segment.duration_s * 1000:.0f}ms < {cfg.min_duration_s * 1000:.0f}ms",
+        )
 
     core = stem[:, int(segment.start_s * sr) : int(segment.end_s * sr)]
     if core.size == 0:
-        return RejectReason.TOO_SHORT
+        return Rejection(RejectReason.TOO_SHORT, "empty slice")
 
     peak_db = _peak_db(core)
     if peak_db < cfg.min_peak_db:
-        return RejectReason.TOO_QUIET
+        return Rejection(
+            RejectReason.TOO_QUIET,
+            f"peak {peak_db:.1f} dBFS < {cfg.min_peak_db:.0f} dBFS",
+        )
 
     if _is_static_noise(np.mean(core, axis=0), cfg):
-        return RejectReason.NOISE
+        return Rejection(
+            RejectReason.NOISE, "flat spectrum with near-static envelope"
+        )
 
     # Padding comes from the surrounding stem audio (natural tails), clamped
     # to the stem bounds.

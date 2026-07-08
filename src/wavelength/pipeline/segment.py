@@ -30,6 +30,31 @@ class Segment:
         return self.end_s - self.start_s
 
 
+@dataclass
+class GateStats:
+    """How the activity gate was set for a stem — surfaced by --debug so a
+    missed effect can be traced to its numbers."""
+
+    noise_floor_db: float
+    threshold_db: float
+    peak_frame_db: float
+
+
+def gate_stats(
+    y: np.ndarray, sr: int, cfg: SegmentationConfig | None = None
+) -> GateStats:
+    cfg = cfg or SegmentationConfig()
+    if y.ndim > 1:
+        y = np.mean(y, axis=0)
+    rms_db = _frame_rms_db(y, cfg)
+    floor = _noise_floor_db(rms_db)
+    return GateStats(
+        noise_floor_db=floor,
+        threshold_db=max(cfg.activity_threshold_db, floor + cfg.noise_floor_margin_db),
+        peak_frame_db=float(np.max(rms_db)) if rms_db.size else -80.0,
+    )
+
+
 def _frame_rms_db(y: np.ndarray, cfg: SegmentationConfig) -> np.ndarray:
     rms = librosa.feature.rms(
         y=y, frame_length=cfg.frame_length, hop_length=cfg.hop_length

@@ -25,12 +25,19 @@ import soundfile as sf
 from wavelength.config import Settings
 from wavelength.library.db import LibraryDB
 from wavelength.pipeline.clean import CleanedEffect
+from wavelength.pipeline.label import LabelResult
 
 
 @dataclass
 class StoredEffect:
     path: Path
     duplicate: bool
+    quarantined: bool = False
+
+
+def _slug(label: str) -> str:
+    safe = "".join(c if c.isalnum() or c == "-" else "-" for c in label.lower())
+    return "-".join(part for part in safe.split("-") if part) or "effect"
 
 
 def _to_int16(audio: np.ndarray) -> np.ndarray:
@@ -47,18 +54,24 @@ def store_effect(
     source_id: int,
     source_hash: str,
     index: int,
+    label: LabelResult | None = None,
 ) -> StoredEffect | None:
-    """Write one effect to the library. Returns None for duplicates."""
+    """Write one effect to the library (or quarantine, when the labeler
+    flags it as speech/music bleed). Returns None for duplicates."""
     pcm = _to_int16(effect.audio)
     content_hash = hashlib.sha256(pcm.tobytes()).hexdigest()
     if db.find_effect_by_hash(content_hash) is not None:
         return None
 
+    quarantined = label.quarantine if label else False
+    name = _slug(label.label) if label and label.label != "unknown" else "effect"
+
     now = datetime.now()
-    subdir = settings.effects_dir / f"{now:%Y}" / f"{now:%m}"
+    root = settings.quarantine_dir if quarantined else settings.effects_dir
+    subdir = root / f"{now:%Y}" / f"{now:%m}"
     subdir.mkdir(parents=True, exist_ok=True)
 
-    base = f"{now:%Y%m%d}-{source_hash[:6]}__effect-{index:02d}"
+    base = f"{now:%Y%m%d}-{source_hash[:6]}__{name}-{index:02d}"
     path = subdir / f"{base}.wav"
     n = 1
     while path.exists():
@@ -75,8 +88,12 @@ def store_effect(
         sample_rate=effect.sample_rate,
         peak_db=round(effect.peak_db, 2),
         start_in_source_s=round(effect.start_in_source_s, 3),
+        auto_label=label.label if label else None,
+        label_confidence=label.confidence if label else None,
+        status="quarantine" if quarantined else "library",
+        quarantine_reason=label.quarantine_reason if label else None,
     )
-    return StoredEffect(path=path, duplicate=False)
+    return StoredEffect(path=path, duplicate=False, quarantined=quarantined)
 
 
 def archive_source(

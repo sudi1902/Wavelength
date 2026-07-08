@@ -242,12 +242,17 @@ existing pipeline unchanged.
 - **Exit criteria:** paste a TikTok link → effects appear in the library,
   attributed to the post's title and uploader
 
-### Phase 2 — Quality, labeling, metadata
-- Segmentation tuning on a corpus of real clips (merge windows, thresholds as config)
-- CLAP labeling + SFX vocabulary + music/speech quarantine filter
-- Full metadata schema, MP3 export, loudness normalization option, dedup hashing
-- Demucs fallback engine; chunked processing for long inputs
-- `sfx library list/search/rename/tag/delete/export` CLI commands
+### Phase 2 — Quality, labeling, metadata ✅ (shipped; tuning continues on real clips)
+- `--debug` mode: gate stats + per-segment keep/reject verdicts with measured values
+- Defaults retuned after Phase-1 field testing (lower gate/peak floors for
+  missed effects; longer post-padding for clipped tails)
+- CLAP zero-shot labeling (~80-term SFX vocabulary) in an isolated venv
+  (`wavelength setup clap`); graceful unlabeled fallback
+- Quarantine: segments scoring higher as speech/music/laughter than as any SFX
+  go to `quarantine/` with the reason recorded; `library review/promote`
+- `library list/search/rename/tag/delete/export` commands; MP3 320 kbps export
+- Deferred: LUFS loudness normalization (Phase 3 polish); MSST already chunks
+  long inputs internally; Bandit-v2 A/B experiment still pending
 - **Exit criteria:** effects come out named ("whoosh-01.wav"), junk rate low enough that you rarely delete manually
 
 ### Phase 3 — Library UI + automation

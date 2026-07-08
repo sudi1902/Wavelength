@@ -42,11 +42,13 @@ CREATE TABLE IF NOT EXISTS effects (
     sample_rate INTEGER NOT NULL,
     peak_db REAL,
     start_in_source_s REAL,
-    auto_label TEXT,                           -- Phase 2
-    label_confidence REAL,                     -- Phase 2
-    user_label TEXT,                           -- Phase 3
-    tags TEXT NOT NULL DEFAULT '',             -- Phase 3, comma-separated
-    created_at TEXT NOT NULL
+    auto_label TEXT,
+    label_confidence REAL,
+    user_label TEXT,
+    tags TEXT NOT NULL DEFAULT '',             -- comma-separated
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'library',    -- library | quarantine
+    quarantine_reason TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_effects_source ON effects(source_id);
@@ -59,6 +61,9 @@ MIGRATIONS = [
     ("source_videos", "source_url", "TEXT"),
     ("source_videos", "title", "TEXT"),
     ("source_videos", "uploader", "TEXT"),
+    # Phase 2: 'library' or 'quarantine' (speech/music bleed under review)
+    ("effects", "status", "TEXT NOT NULL DEFAULT 'library'"),
+    ("effects", "quarantine_reason", "TEXT"),
 ]
 
 
@@ -142,8 +147,15 @@ class LibraryDB:
         )
         self.conn.commit()
 
+    def effects_for_source(self, source_id: int) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM effects WHERE source_id = ?", (source_id,)
+        ).fetchall()
+
     def delete_source(self, source_id: int) -> None:
-        """Remove a source and its effect rows (used to re-process)."""
+        """Remove a source and its effect rows (used to re-process).
+        Callers that own the files should remove them first via
+        effects_for_source — this only touches the database."""
         self.conn.execute("DELETE FROM effects WHERE source_id = ?", (source_id,))
         self.conn.execute("DELETE FROM source_videos WHERE id = ?", (source_id,))
         self.conn.commit()
@@ -159,22 +171,78 @@ class LibraryDB:
         self, *, source_id: int, path: str, content_sha256: str,
         duration_s: float, sample_rate: int, peak_db: float | None,
         start_in_source_s: float | None,
+        auto_label: str | None = None, label_confidence: float | None = None,
+        status: str = "library", quarantine_reason: str | None = None,
     ) -> int:
         cur = self.conn.execute(
             "INSERT INTO effects (source_id, path, content_sha256, duration_s,"
-            " sample_rate, peak_db, start_in_source_s, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " sample_rate, peak_db, start_in_source_s, created_at,"
+            " auto_label, label_confidence, status, quarantine_reason)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (source_id, path, content_sha256, duration_s, sample_rate,
-             peak_db, start_in_source_s, utcnow()),
+             peak_db, start_in_source_s, utcnow(),
+             auto_label, label_confidence, status, quarantine_reason),
         )
         self.conn.commit()
         return cur.lastrowid
 
-    def list_effects(self) -> list[sqlite3.Row]:
+    _EFFECT_SELECT = (
+        "SELECT e.*, s.filename AS source_filename, s.title AS source_title,"
+        " s.uploader AS source_uploader, s.source_url AS source_url"
+        " FROM effects e JOIN source_videos s ON s.id = e.source_id"
+    )
+
+    def list_effects(self, status: str = "library") -> list[sqlite3.Row]:
         return self.conn.execute(
-            "SELECT e.*, s.filename AS source_filename, s.title AS source_title,"
-            " s.uploader AS source_uploader, s.source_url AS source_url"
-            " FROM effects e"
-            " JOIN source_videos s ON s.id = e.source_id"
-            " ORDER BY e.created_at DESC, e.id DESC"
+            f"{self._EFFECT_SELECT} WHERE e.status = ?"
+            " ORDER BY e.created_at DESC, e.id DESC",
+            (status,),
         ).fetchall()
+
+    def search_effects(self, query: str) -> list[sqlite3.Row]:
+        """Case-insensitive substring match across labels, tags, filename,
+        and source title/uploader. Library effects only."""
+        like = f"%{query}%"
+        return self.conn.execute(
+            f"{self._EFFECT_SELECT} WHERE e.status = 'library' AND ("
+            " e.auto_label LIKE ? OR e.user_label LIKE ? OR e.tags LIKE ?"
+            " OR e.path LIKE ? OR s.title LIKE ? OR s.uploader LIKE ?"
+            " OR s.filename LIKE ?)"
+            " ORDER BY e.created_at DESC, e.id DESC",
+            (like, like, like, like, like, like, like),
+        ).fetchall()
+
+    def get_effect(self, effect_id: int) -> sqlite3.Row | None:
+        return self.conn.execute(
+            f"{self._EFFECT_SELECT} WHERE e.id = ?", (effect_id,)
+        ).fetchone()
+
+    def set_user_label(self, effect_id: int, label: str) -> None:
+        self.conn.execute(
+            "UPDATE effects SET user_label = ? WHERE id = ?", (label, effect_id)
+        )
+        self.conn.commit()
+
+    def set_tags(self, effect_id: int, tags: str) -> None:
+        self.conn.execute(
+            "UPDATE effects SET tags = ? WHERE id = ?", (tags, effect_id)
+        )
+        self.conn.commit()
+
+    def set_status(
+        self, effect_id: int, status: str, path: str | None = None
+    ) -> None:
+        if path is not None:
+            self.conn.execute(
+                "UPDATE effects SET status = ?, path = ? WHERE id = ?",
+                (status, path, effect_id),
+            )
+        else:
+            self.conn.execute(
+                "UPDATE effects SET status = ? WHERE id = ?", (status, effect_id)
+            )
+        self.conn.commit()
+
+    def delete_effect(self, effect_id: int) -> None:
+        self.conn.execute("DELETE FROM effects WHERE id = ?", (effect_id,))
+        self.conn.commit()

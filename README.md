@@ -46,6 +46,43 @@ wavelength library         # list everything extracted so far
 wavelength info            # config + engine status
 ```
 
+## Auto-labeling (optional, recommended)
+
+```bash
+wavelength setup clap      # one-time: CLAP model (~2 GB) in its own venv
+```
+
+With the labeler installed, effects come out *named* — `...__whoosh-01.wav`,
+`...__pop-02.wav` — and segments that are really speech/music bleed from the
+separator are diverted to `quarantine/` for review instead of polluting the
+library. Without it, extraction still works; effects are just unlabeled.
+
+## Managing the library
+
+```bash
+wavelength library                     # list
+wavelength library search whoosh      # match labels, tags, filenames, sources
+wavelength library rename 12 "sub-drop"
+wavelength library tag 12 "transition,bass"
+wavelength library review              # inspect quarantined segments
+wavelength library promote 15          # quarantine -> library
+wavelength library delete 13
+wavelength library export 12 14 --dest ~/Desktop --mp3   # 320 kbps
+```
+
+Renames and tags live in the database — file paths never change, so anything
+referencing a WAV (CapCut, Premiere, a DAW project) keeps working.
+
+## Debugging detection
+
+```bash
+wavelength extract video.mp4 --debug
+```
+
+Shows the noise floor and gate threshold plus a keep/reject verdict (with
+measured values) for every candidate segment — the data needed to tune the
+thresholds in `~/.config/wavelength/config.toml` when something gets missed.
+
 ## Separation engines
 
 | Engine | What it is | When to use |
