@@ -45,6 +45,31 @@ STEM_ALIASES = {
     "effects": ("effects", "effect", "sfx"),
 }
 
+# MSST's requirements.txt bundles packages that BandIt inference never
+# imports and that break a clean install: pyaudio (needs the portaudio
+# system library), a GUI toolkit, global keyboard hooks, and CUDA-only
+# training kernels with no Apple Silicon wheels. We install everything
+# except these. Validated: the model imports and builds with the remainder.
+REQUIREMENTS_DENYLIST = {
+    "pyaudio",
+    "wxpython",
+    "keyboard",
+    "sageattention",
+    "bitsandbytes",
+    "moises-light",
+    "wandb",
+}
+
+
+def _requirement_name(line: str) -> str:
+    """Extract the distribution name from a requirements.txt line."""
+    line = line.strip()
+    for sep in ("==", ">=", "<=", "~=", ">", "<", "!=", "==", "@", "["):
+        idx = line.find(sep)
+        if idx != -1:
+            line = line[:idx]
+    return line.strip().lower()
+
 
 class BanditSeparator(Separator):
     name = "bandit"
@@ -102,11 +127,24 @@ class BanditSeparator(Separator):
                 f"Could not clone MSST repository:\n{result.stderr.strip()}"
             )
 
+    def _filtered_requirements(self) -> Path:
+        """Write MSST's requirements minus the denylisted packages to a file
+        in the venv dir, and return its path."""
+        src = (self.msst_dir / "requirements.txt").read_text().splitlines()
+        kept = [
+            line for line in src
+            if line.strip()
+            and _requirement_name(line) not in REQUIREMENTS_DENYLIST
+        ]
+        dest = self.venv_dir / "wavelength-requirements.txt"
+        dest.write_text("\n".join(kept) + "\n")
+        return dest
+
     def _build_venv(self) -> None:
         if self.venv_python.is_file() and (self.venv_dir / ".deps-ok").is_file():
             return
         print("[bandit] Creating isolated venv and installing dependencies "
-              "(one-time, several minutes) ...")
+              "(one-time, several minutes — includes PyTorch) ...")
         result = subprocess.run(
             [sys.executable, "-m", "venv", str(self.venv_dir)],
             capture_output=True, text=True,
@@ -116,7 +154,7 @@ class BanditSeparator(Separator):
         result = subprocess.run(
             [
                 str(self.venv_python), "-m", "pip", "install", "--quiet",
-                "-r", str(self.msst_dir / "requirements.txt"),
+                "-r", str(self._filtered_requirements()),
             ],
             capture_output=True, text=True,
         )
