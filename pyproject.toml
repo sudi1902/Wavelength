@@ -1,0 +1,39 @@
+[project]
+name = "wavelength"
+version = "0.1.0"
+description = "Extract and isolate individual sound effects from short-form videos into a searchable personal library"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.24",
+    "soundfile>=0.12",
+    "librosa>=0.10",
+    "typer>=0.12",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+# Heavy ML runtime for the demucs fallback engine. The primary bandit engine
+# runs in its own isolated venv (managed by `wavelength setup bandit`) so it
+# does not need these.
+demucs = [
+    "torch>=2.3",
+    "demucs>=4.0",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+wavelength = "wavelength.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wavelength"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
