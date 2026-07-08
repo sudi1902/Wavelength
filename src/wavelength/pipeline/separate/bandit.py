@@ -45,6 +45,33 @@ STEM_ALIASES = {
     "effects": ("effects", "effect", "sfx"),
 }
 
+# BandIt registers some float64 buffers (filterbank tables); Apple's MPS
+# backend only supports float32, so moving the model to the GPU crashes with
+# "Cannot convert a MPS Tensor to float64". This shim wraps MSST's
+# inference.py and casts the model to float32 whenever it is moved to MPS.
+# Run as: python mps_shim.py <path/to/inference.py> <inference args...>
+MPS_SHIM = '''\
+import runpy
+import sys
+
+import torch.nn as nn
+
+_orig_to = nn.Module.to
+
+
+def _to_float32_on_mps(self, *args, **kwargs):
+    device = args[0] if args else kwargs.get("device")
+    if device is not None and "mps" in str(device):
+        self.float()
+    return _orig_to(self, *args, **kwargs)
+
+
+nn.Module.to = _to_float32_on_mps
+
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+
 # MSST's requirements.txt bundles packages that BandIt inference never
 # imports and that break a clean install: pyaudio (needs the portaudio
 # system library), a GUI toolkit, global keyboard hooks, and CUDA-only
@@ -208,28 +235,7 @@ class BanditSeparator(Separator):
             sf.write(in_dir / "mixture.wav", audio.T, MODEL_SAMPLE_RATE,
                      subtype="FLOAT")
 
-            cmd = [
-                str(self.venv_python),
-                str(self.msst_dir / "inference.py"),
-                "--model_type", "bandit",
-                "--config_path", str(self.config_path),
-                "--start_check_point", str(self.checkpoint_path),
-                "--input_folder", str(in_dir),
-                "--store_dir", str(out_dir),
-                # Force float WAV output; MSST otherwise switches to FLAC
-                # when the estimate's peak is <= 1.0.
-                "--pcm_type", "FLOAT",
-            ]
-            if self.settings.device == "cpu":
-                cmd.append("--force_cpu")
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, cwd=str(self.msst_dir),
-                timeout=1800,
-            )
-            if result.returncode != 0:
-                raise SeparationError(
-                    "BandIt inference failed:\n" + result.stderr.strip()[-2000:]
-                )
+            self._run_inference(in_dir, out_dir)
 
             stems = self._collect_stems(out_dir)
             if "effects" not in stems:
@@ -246,6 +252,49 @@ class BanditSeparator(Separator):
             effects=stems["effects"],
             sample_rate=MODEL_SAMPLE_RATE,
         )
+
+    def _run_inference(self, in_dir: Path, out_dir: Path) -> None:
+        """Run MSST inference, on GPU (MPS/CUDA) when available with an
+        automatic CPU retry. device setting: auto = try GPU then fall back;
+        cpu = CPU only; mps/cuda = GPU only, surface failures."""
+        device = self.settings.device
+        attempts = ["gpu", "cpu"] if device == "auto" else (
+            ["cpu"] if device == "cpu" else ["gpu"]
+        )
+
+        inference_args = [
+            str(self.msst_dir / "inference.py"),
+            "--model_type", "bandit",
+            "--config_path", str(self.config_path),
+            "--start_check_point", str(self.checkpoint_path),
+            "--input_folder", str(in_dir),
+            "--store_dir", str(out_dir),
+            # Force float WAV output; MSST otherwise switches to FLAC
+            # when the estimate's peak is <= 1.0.
+            "--pcm_type", "FLOAT",
+        ]
+
+        shim_path = self.settings.cache_dir / "mps_shim.py"
+        shim_path.parent.mkdir(parents=True, exist_ok=True)
+        shim_path.write_text(MPS_SHIM)
+
+        last_error = ""
+        for attempt in attempts:
+            if attempt == "gpu":
+                cmd = [str(self.venv_python), str(shim_path), *inference_args]
+            else:
+                cmd = [str(self.venv_python), *inference_args, "--force_cpu"]
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, cwd=str(self.msst_dir),
+                timeout=1800,
+            )
+            if result.returncode == 0:
+                return
+            last_error = result.stderr.strip()[-2000:]
+            if attempt == "gpu" and len(attempts) > 1:
+                print("[bandit] GPU inference failed; retrying on CPU ...")
+
+        raise SeparationError("BandIt inference failed:\n" + last_error)
 
     @staticmethod
     def _collect_stems(out_dir: Path) -> dict[str, np.ndarray]:

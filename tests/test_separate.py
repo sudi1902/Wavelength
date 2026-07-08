@@ -53,6 +53,72 @@ def test_bandit_collect_stems_flat_flac_sfx_alias(tmp_path):
     assert set(stems) == {"speech", "music", "effects"}
 
 
+class _FakeRun:
+    """Records inference invocations and scripts their outcomes."""
+
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.commands = []
+
+    def __call__(self, cmd, **kwargs):
+        import subprocess
+
+        self.commands.append(cmd)
+        return subprocess.CompletedProcess(
+            cmd, returncode=self.outcomes.pop(0), stdout="", stderr="boom"
+        )
+
+
+def test_bandit_auto_falls_back_to_cpu_when_gpu_fails(
+    tmp_path, settings, monkeypatch
+):
+    import wavelength.pipeline.separate.bandit as bandit_mod
+
+    settings.device = "auto"
+    separator = BanditSeparator(settings)
+    fake = _FakeRun([1, 0])  # gpu attempt fails, cpu attempt succeeds
+    monkeypatch.setattr(bandit_mod.subprocess, "run", fake)
+
+    separator._run_inference(tmp_path, tmp_path)
+
+    assert len(fake.commands) == 2
+    # First attempt goes through the MPS shim, no --force_cpu.
+    assert any("mps_shim.py" in part for part in fake.commands[0])
+    assert "--force_cpu" not in fake.commands[0]
+    # Retry is CPU-only, no shim.
+    assert "--force_cpu" in fake.commands[1]
+    assert not any("mps_shim.py" in part for part in fake.commands[1])
+    # Shim was written and is valid Python.
+    shim = settings.cache_dir / "mps_shim.py"
+    compile(shim.read_text(), str(shim), "exec")
+
+
+def test_bandit_cpu_device_never_tries_gpu(tmp_path, settings, monkeypatch):
+    import wavelength.pipeline.separate.bandit as bandit_mod
+
+    settings.device = "cpu"
+    separator = BanditSeparator(settings)
+    fake = _FakeRun([0])
+    monkeypatch.setattr(bandit_mod.subprocess, "run", fake)
+
+    separator._run_inference(tmp_path, tmp_path)
+
+    assert len(fake.commands) == 1
+    assert "--force_cpu" in fake.commands[0]
+
+
+def test_bandit_all_attempts_fail_raises(tmp_path, settings, monkeypatch):
+    import wavelength.pipeline.separate.bandit as bandit_mod
+
+    settings.device = "auto"
+    separator = BanditSeparator(settings)
+    fake = _FakeRun([1, 1])
+    monkeypatch.setattr(bandit_mod.subprocess, "run", fake)
+
+    with pytest.raises(SeparationError, match="BandIt inference failed"):
+        separator._run_inference(tmp_path, tmp_path)
+
+
 def test_requirement_name_parsing():
     assert _requirement_name("pyaudio") == "pyaudio"
     assert _requirement_name("wxpython==4.2.2") == "wxpython"
