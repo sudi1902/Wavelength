@@ -17,8 +17,9 @@ from rich.table import Table
 from wavelength import __version__
 from wavelength.config import SUPPORTED_EXTENSIONS, load_settings
 from wavelength.library.db import LibraryDB
+from wavelength.pipeline.download import DownloadError, is_url
 from wavelength.pipeline.ingest import IngestError
-from wavelength.pipeline.runner import PipelineError, extract_video
+from wavelength.pipeline.runner import PipelineError, extract_url, extract_video
 from wavelength.pipeline.separate import SeparationError, get_separator
 
 app = typer.Typer(
@@ -32,7 +33,9 @@ err_console = Console(stderr=True)
 
 @app.command()
 def extract(
-    videos: list[Path] = typer.Argument(..., help="Video file(s) to process"),
+    videos: list[str] = typer.Argument(
+        ..., help="Video file(s) and/or URLs (TikTok, Instagram, ...) to process"
+    ),
     engine: str = typer.Option(
         None, help="Separation engine: bandit (default), demucs, or none"
     ),
@@ -42,9 +45,14 @@ def extract(
     force_long: bool = typer.Option(
         False, "--force-long", help="Process videos over the duration cap"
     ),
+    browser: str = typer.Option(
+        None,
+        help="Borrow login cookies from this browser for URL downloads "
+        "(chrome, safari, firefox, edge) — needed for most Instagram links",
+    ),
     library_dir: Path = typer.Option(None, help="Override library location"),
 ):
-    """Extract sound effects from VIDEOS into the library."""
+    """Extract sound effects from VIDEOS (files or URLs) into the library."""
     settings = load_settings()
     if library_dir is not None:
         settings.library_dir = library_dir.expanduser()
@@ -52,23 +60,34 @@ def extract(
     failures = 0
     with LibraryDB(settings.db_path) as db:
         separator = None
-        for video in videos:
-            if video.suffix.lower() not in SUPPORTED_EXTENSIONS:
+        for target in videos:
+            target_is_url = is_url(target)
+            video = Path(target)
+            if not target_is_url and video.suffix.lower() not in SUPPORTED_EXTENSIONS:
                 err_console.print(
                     f"[yellow]skipping {video.name}: unsupported extension[/]"
                 )
                 continue
-            console.print(f"[bold]{video.name}[/]")
+            console.print(f"[bold]{target if target_is_url else video.name}[/]")
             try:
                 if separator is None:
                     separator = get_separator(settings, engine)
-                result = extract_video(
-                    video, settings,
-                    force=force, max_duration_override=force_long,
-                    progress=lambda msg: console.print(f"  [dim]{msg}[/]"),
-                    separator=separator, db=db,
-                )
-            except (IngestError, PipelineError, SeparationError) as exc:
+                progress = lambda msg: console.print(f"  [dim]{msg}[/]")  # noqa: E731
+                if target_is_url:
+                    result = extract_url(
+                        target, settings,
+                        force=force, max_duration_override=force_long,
+                        browser=browser, progress=progress,
+                        separator=separator, db=db,
+                    )
+                else:
+                    result = extract_video(
+                        video, settings,
+                        force=force, max_duration_override=force_long,
+                        progress=progress,
+                        separator=separator, db=db,
+                    )
+            except (IngestError, PipelineError, SeparationError, DownloadError) as exc:
                 failures += 1
                 err_console.print(f"  [red]error:[/] {exc}")
                 continue
@@ -130,11 +149,14 @@ def library(
     table.add_column("source")
     table.add_column("added")
     for row in rows:
+        source = row["source_title"] or row["source_filename"]
+        if row["source_uploader"]:
+            source = f"{source} (@{row['source_uploader']})"
         table.add_row(
             row["path"],
             f"{row['duration_s']:.2f}s",
             f"{row['sample_rate'] // 1000}k",
-            row["source_filename"],
+            source,
             row["created_at"][:10],
         )
     console.print(table)

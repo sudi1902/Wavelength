@@ -18,6 +18,7 @@ from wavelength.config import Settings
 from wavelength.library.db import LibraryDB
 from wavelength.pipeline import ingest
 from wavelength.pipeline.clean import CleanedEffect, RejectReason, clean_segment
+from wavelength.pipeline.download import DownloadedVideo, download_video
 from wavelength.pipeline.segment import detect_segments
 from wavelength.pipeline.separate import Separator, get_separator
 from wavelength.pipeline.store import archive_source, store_effect
@@ -43,6 +44,60 @@ class ExtractionResult:
 Progress = Callable[[str], None]
 
 
+def extract_url(
+    url: str,
+    settings: Settings,
+    *,
+    engine: str | None = None,
+    force: bool = False,
+    max_duration_override: bool = False,
+    browser: str | None = None,
+    progress: Progress = lambda msg: None,
+    separator: Separator | None = None,
+    db: LibraryDB | None = None,
+) -> ExtractionResult:
+    """Download a video from a URL and run the full pipeline on it.
+
+    Dedup happens at the URL level before any bytes are fetched (platforms
+    re-encode per download, so file hashes can't catch re-ingests).
+    """
+    owns_db = db is None
+    db = db or LibraryDB(settings.db_path)
+    try:
+        existing = db.find_source_by_url(url)
+        if existing is not None and existing["status"] != "failed":
+            if not force:
+                result = ExtractionResult(video=Path(url))
+                result.already_processed = True
+                progress(
+                    f"URL already processed ({existing['effect_count']} effects); "
+                    "use --force to re-extract"
+                )
+                return result
+            db.delete_source(existing["id"])
+
+        with tempfile.TemporaryDirectory(prefix="wavelength-dl-") as tmp:
+            downloaded = download_video(
+                url,
+                Path(tmp),
+                browser=browser,
+                max_duration_s=(
+                    None if max_duration_override else settings.max_video_duration_s
+                ),
+                progress=progress,
+            )
+            return extract_video(
+                downloaded.path, settings,
+                engine=engine, force=force,
+                max_duration_override=max_duration_override,
+                progress=progress, separator=separator, db=db,
+                origin=downloaded,
+            )
+    finally:
+        if owns_db:
+            db.close()
+
+
 def extract_video(
     video: Path,
     settings: Settings,
@@ -53,11 +108,13 @@ def extract_video(
     progress: Progress = lambda msg: None,
     separator: Separator | None = None,
     db: LibraryDB | None = None,
+    origin: DownloadedVideo | None = None,
 ) -> ExtractionResult:
     """Run the full pipeline on one video.
 
     ``force`` re-processes a video that is already in the library.
     ``separator``/``db`` can be injected (batch runs reuse a loaded model).
+    ``origin`` carries URL/title/uploader metadata for downloaded videos.
     """
     video = video.expanduser().resolve()
     ingest.require_ffmpeg()
@@ -68,7 +125,7 @@ def extract_video(
         return _run(
             video, settings, engine=engine, force=force,
             max_duration_override=max_duration_override,
-            progress=progress, separator=separator, db=db,
+            progress=progress, separator=separator, db=db, origin=origin,
         )
     finally:
         if owns_db:
@@ -79,6 +136,7 @@ def _run(
     video: Path, settings: Settings, *, engine: str | None, force: bool,
     max_duration_override: bool, progress: Progress,
     separator: Separator | None, db: LibraryDB,
+    origin: DownloadedVideo | None = None,
 ) -> ExtractionResult:
     result = ExtractionResult(video=video)
 
@@ -116,10 +174,13 @@ def _run(
 
     source_id = db.add_source(
         sha256=video_hash,
-        original_path=str(video),
+        original_path=str(video) if origin is None else origin.url,
         filename=video.name,
         duration_s=info.duration_s,
         engine=separator.name,
+        source_url=origin.url if origin else None,
+        title=origin.title if origin else None,
+        uploader=origin.uploader if origin else None,
     )
 
     try:

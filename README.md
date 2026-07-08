@@ -27,6 +27,13 @@ wavelength setup bandit    # one-time: installs the separation model (~500 MB)
 ## Use
 
 ```bash
+# From a link — TikTok, Instagram, YouTube, and ~1,800 other sites
+wavelength extract "https://www.tiktok.com/@user/video/123..."
+
+# Instagram usually needs your logged-in browser session:
+wavelength extract "https://www.instagram.com/reel/AbC123.../" --browser chrome
+
+# From a local file
 wavelength extract ~/Downloads/funny-video.mp4
 #   Probing funny-video.mp4
 #   Separating stems (bandit)

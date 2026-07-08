@@ -27,7 +27,10 @@ CREATE TABLE IF NOT EXISTS source_videos (
     effect_count INTEGER NOT NULL DEFAULT 0,
     archived_video_path TEXT,
     archived_stem_path TEXT,
-    ingested_at TEXT NOT NULL
+    ingested_at TEXT NOT NULL,
+    source_url TEXT,                           -- canonical URL for URL ingests
+    title TEXT,                                -- post title from the platform
+    uploader TEXT                              -- account the post came from
 );
 
 CREATE TABLE IF NOT EXISTS effects (
@@ -49,6 +52,15 @@ CREATE TABLE IF NOT EXISTS effects (
 CREATE INDEX IF NOT EXISTS idx_effects_source ON effects(source_id);
 """
 
+# Columns added after the first release; applied to existing databases on
+# open. SQLite's CREATE TABLE IF NOT EXISTS does not add columns to tables
+# that already exist.
+MIGRATIONS = [
+    ("source_videos", "source_url", "TEXT"),
+    ("source_videos", "title", "TEXT"),
+    ("source_videos", "uploader", "TEXT"),
+]
+
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -61,6 +73,18 @@ class LibraryDB:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        for table, column, col_type in MIGRATIONS:
+            existing = {
+                row[1] for row in self.conn.execute(f"PRAGMA table_info({table})")
+            }
+            if column not in existing:
+                self.conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
+                )
+        self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
@@ -78,15 +102,28 @@ class LibraryDB:
             "SELECT * FROM source_videos WHERE sha256 = ?", (sha256,)
         ).fetchone()
 
+    def find_source_by_url(self, source_url: str) -> sqlite3.Row | None:
+        """URL-based dedup: platforms re-encode on every download, so the
+        same post yields different file hashes — the URL is the stable key."""
+        return self.conn.execute(
+            "SELECT * FROM source_videos WHERE source_url = ?"
+            " ORDER BY id DESC LIMIT 1",
+            (source_url,),
+        ).fetchone()
+
     def add_source(
         self, *, sha256: str, original_path: str, filename: str,
         duration_s: float, engine: str,
+        source_url: str | None = None, title: str | None = None,
+        uploader: str | None = None,
     ) -> int:
         cur = self.conn.execute(
             "INSERT INTO source_videos"
-            " (sha256, original_path, filename, duration_s, engine, ingested_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (sha256, original_path, filename, duration_s, engine, utcnow()),
+            " (sha256, original_path, filename, duration_s, engine,"
+            "  ingested_at, source_url, title, uploader)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (sha256, original_path, filename, duration_s, engine, utcnow(),
+             source_url, title, uploader),
         )
         self.conn.commit()
         return cur.lastrowid
@@ -135,7 +172,9 @@ class LibraryDB:
 
     def list_effects(self) -> list[sqlite3.Row]:
         return self.conn.execute(
-            "SELECT e.*, s.filename AS source_filename FROM effects e"
+            "SELECT e.*, s.filename AS source_filename, s.title AS source_title,"
+            " s.uploader AS source_uploader, s.source_url AS source_url"
+            " FROM effects e"
             " JOIN source_videos s ON s.id = e.source_id"
             " ORDER BY e.created_at DESC, e.id DESC"
         ).fetchall()

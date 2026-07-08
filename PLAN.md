@@ -229,6 +229,19 @@ Python deps: `torch`, `librosa`, `soundfile`, `numpy`, `laion_clap` (or `msclap`
 - WAV export + minimal SQLite record (source, date, duration)
 - **Exit criteria:** drop in a real TikTok with 3–4 obvious SFX → get 3–4 clean, separately-usable WAVs
 
+### Phase 1.5 — URL ingestion (added after Phase 1 shipped)
+`wavelength extract <tiktok-or-instagram-url>` — download via yt-dlp, then the
+existing pipeline unchanged.
+- URL detection in the CLI; yt-dlp as a library, audio-only stream preferred
+- Duration cap enforced from metadata *before* downloading
+- `--browser chrome|safari|...` borrows the logged-in session for Instagram
+  (downloads only what the user could already watch)
+- DB: `source_url`, `title`, `uploader` columns (+ migration for existing
+  libraries); dedup by canonical URL since platforms re-encode per download
+- Friendly failure messages (login walls, private posts, stale yt-dlp)
+- **Exit criteria:** paste a TikTok link → effects appear in the library,
+  attributed to the post's title and uploader
+
 ### Phase 2 — Quality, labeling, metadata
 - Segmentation tuning on a corpus of real clips (merge windows, thresholds as config)
 - CLAP labeling + SFX vocabulary + music/speech quarantine filter
