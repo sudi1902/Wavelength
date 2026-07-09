@@ -275,6 +275,28 @@ existing pipeline unchanged.
 - UI panel: side-by-side listening, license/attribution display (default CC0),
   keep-mine / take-this / keep-both
 
+### Phase 4 — Wavelength online: hosting + user accounts
+A product pivot from personal tool to hosted service; the largest phase in the
+plan. Accounts and hosting ship together — neither is useful alone.
+
+- **4a — Multi-tenant foundations**: signup/login + sessions (Supabase Auth is
+  the leading candidate: auth + Postgres + file storage in one service);
+  SQLite → Postgres with `user_id` across the schema; library files →
+  per-user cloud storage buckets; the local app remains supported (same
+  pipeline code, two storage backends)
+- **4b — Server-side pipeline**: worker queue (the existing JobQueue pattern,
+  backed by Redis or Postgres) running BandIt/CLAP on cloud workers; the
+  paste-a-link flow becomes fully server-side; progress via polling as today
+- **4c — Public hardening**: per-user quotas, rate limits, abuse protection,
+  cost monitoring; decide on free/paid tiers once real usage costs are known
+
+Known considerations, decided consciously before launch:
+- Running costs begin here (separation compute, storage, bandwidth)
+- Server-side downloading of platform content on users' behalf is a different
+  legal posture than personal local use — needs ToS language and a policy call
+- **Exit criteria:** a stranger signs up in a browser, pastes a TikTok link,
+  and builds their own persistent effect library without installing anything
+
 ---
 
 ## 7. Open Questions
