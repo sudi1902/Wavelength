@@ -55,12 +55,13 @@ def store_effect(
     source_hash: str,
     index: int,
     label: LabelResult | None = None,
+    session_id: str | None = None,
 ) -> StoredEffect | None:
     """Write one effect to the library (or quarantine, when the labeler
     flags it as speech/music bleed). Returns None for duplicates."""
     pcm = _to_int16(effect.audio)
     content_hash = hashlib.sha256(pcm.tobytes()).hexdigest()
-    if db.find_effect_by_hash(content_hash) is not None:
+    if db.find_effect_by_hash(content_hash, session_id) is not None:
         return None
 
     quarantined = label.quarantine if label else False
@@ -93,6 +94,7 @@ def store_effect(
         status="quarantine" if quarantined else "library",
         quarantine_reason=label.quarantine_reason if label else None,
         embedding=label.embedding if label else None,
+        session_id=session_id,
     )
     return StoredEffect(path=path, duplicate=False, quarantined=quarantined)
 

@@ -54,9 +54,13 @@ class JobQueue:
         self._worker = threading.Thread(target=self._run, daemon=True)
         self._worker.start()
 
-    def submit(self, target: str, *, force: bool = False) -> Job:
+    def submit(
+        self, target: str, *, force: bool = False,
+        session_id: str | None = None,
+    ) -> Job:
         job = Job(id=next(self._ids), target=target)
         job.force = force  # type: ignore[attr-defined]
+        job.session_id = session_id  # type: ignore[attr-defined]
         with self._lock:
             self._jobs[job.id] = job
         self._queue.put(job.id)
@@ -82,15 +86,18 @@ class JobQueue:
                 if self._separator is None:
                     self._separator = get_separator(self.settings)
                 force = getattr(job, "force", False)
+                session_id = getattr(job, "session_id", None)
                 if is_url(job.target):
                     result = extract_url(
                         job.target, self.settings, force=force,
                         progress=progress, separator=self._separator,
+                        session_id=session_id,
                     )
                 else:
                     result = extract_video(
                         Path(job.target), self.settings, force=force,
                         progress=progress, separator=self._separator,
+                        session_id=session_id,
                     )
                 job.effect_count = result.effect_count
                 job.quarantined = len(result.quarantined_paths)

@@ -334,15 +334,24 @@ const post = (path, body) => api(path, {
 });
 
 /* ── status LEDs ─────────────────────────────────────────────────────── */
+let isPublic = false;
 async function refreshStatus() {
   try {
     const s = await api("/api/status");
+    isPublic = s.public;
     $("#led-count").textContent =
       `${s.library_count} sound${s.library_count === 1 ? "" : "s"}`;
     $("#led-engine").classList.toggle("on", s.engine_ready);
     $("#led-engine").querySelector("span").textContent = `engine ${s.engine}`;
     $("#led-labels").classList.toggle("on", s.labeler_ready);
     $("#qcount").textContent = s.quarantine_count ? `(${s.quarantine_count})` : "";
+    if (isPublic) {
+      // Internet mode: no watch folders, and the library lives in this
+      // browser's session.
+      document.querySelector(".watch").style.display = "none";
+      $("#target").placeholder =
+        "Paste a TikTok or Instagram link — its sound effects become yours";
+    }
   } catch {}
 }
 
@@ -602,7 +611,11 @@ async function refreshList() {
         d.textContent = "Quarantine is empty — nothing flagged.";
       } else {
         d.innerHTML = '<div class="big">Your library is empty</div>' +
-          "Paste a TikTok or Instagram link above to pull its sound effects.";
+          "Paste a TikTok or Instagram link above to pull its sound effects." +
+          (isPublic
+            ? "<br><span style='font-size:12px'>Your library lives in this " +
+              "browser — accounts are coming so you can keep it forever.</span>"
+            : "");
       }
       list.append(d);
       return;

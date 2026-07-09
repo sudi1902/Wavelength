@@ -162,6 +162,15 @@ def setup(
 @app.command()
 def serve(
     port: int = typer.Option(8317, help="Port to serve the library UI on"),
+    host: str = typer.Option(
+        "127.0.0.1",
+        help="Bind address. Use 0.0.0.0 only together with --public.",
+    ),
+    public: bool = typer.Option(
+        False, "--public",
+        help="Multi-user internet mode: anonymous per-browser libraries, "
+        "URL-only extraction, no filesystem access, rate limits",
+    ),
     no_browser: bool = typer.Option(
         False, "--no-browser", help="Don't open the browser automatically"
     ),
@@ -176,11 +185,19 @@ def serve(
     from wavelength.server.app import create_app
 
     settings = _settings(library_dir)
-    url = f"http://127.0.0.1:{port}"
-    console.print(f"Wavelength UI: [bold cyan]{url}[/]  (Ctrl+C to stop)")
-    if not no_browser:
+    if host != "127.0.0.1" and not public:
+        err_console.print(
+            "[red]Refusing to bind beyond localhost without --public.[/] "
+            "Local mode can read files on this machine; exposing it would "
+            "let visitors do the same. Add --public for internet serving."
+        )
+        raise typer.Exit(code=1)
+    url = f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{port}"
+    mode = "PUBLIC multi-user" if public else "local single-user"
+    console.print(f"Wavelength UI ({mode}): [bold cyan]{url}[/]  (Ctrl+C to stop)")
+    if not no_browser and host == "127.0.0.1":
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
-    uvicorn.run(create_app(settings), host="127.0.0.1", port=port,
+    uvicorn.run(create_app(settings, public=public), host=host, port=port,
                 log_level="warning")
 
 

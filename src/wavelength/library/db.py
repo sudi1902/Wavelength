@@ -17,7 +17,7 @@ from pathlib import Path
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS source_videos (
     id INTEGER PRIMARY KEY,
-    sha256 TEXT NOT NULL UNIQUE,
+    sha256 TEXT NOT NULL,                      -- deduped per session
     original_path TEXT NOT NULL,
     filename TEXT NOT NULL,
     duration_s REAL NOT NULL,
@@ -37,7 +37,10 @@ CREATE TABLE IF NOT EXISTS effects (
     id INTEGER PRIMARY KEY,
     source_id INTEGER NOT NULL REFERENCES source_videos(id),
     path TEXT NOT NULL,                        -- relative to library dir
-    content_sha256 TEXT NOT NULL UNIQUE,       -- hash of 16-bit PCM payload
+    content_sha256 TEXT NOT NULL,              -- hash of 16-bit PCM payload
+                                               -- (deduped per session, not
+                                               -- globally: two visitors may
+                                               -- extract the same video)
     duration_s REAL NOT NULL,
     sample_rate INTEGER NOT NULL,
     peak_db REAL,
@@ -52,6 +55,8 @@ CREATE TABLE IF NOT EXISTS effects (
 );
 
 CREATE INDEX IF NOT EXISTS idx_effects_source ON effects(source_id);
+CREATE INDEX IF NOT EXISTS idx_effects_hash ON effects(content_sha256);
+CREATE INDEX IF NOT EXISTS idx_sources_hash ON source_videos(sha256);
 """
 
 # Columns added after the first release; applied to existing databases on
@@ -73,6 +78,11 @@ MIGRATIONS = [
     ("effects", "license", "TEXT"),
     ("effects", "attribution", "TEXT"),
     ("effects", "derived_from", "INTEGER"),
+    # Phase 4: anonymous-session multi-tenancy for public hosting. NULL in
+    # local single-user mode. A session becomes claimable by an account
+    # later without touching this schema again.
+    ("source_videos", "session_id", "TEXT"),
+    ("effects", "session_id", "TEXT"),
 ]
 
 
@@ -111,33 +121,38 @@ class LibraryDB:
 
     # -- source videos -------------------------------------------------------
 
-    def find_source(self, sha256: str) -> sqlite3.Row | None:
+    def find_source(
+        self, sha256: str, session_id: str | None = None
+    ) -> sqlite3.Row | None:
         return self.conn.execute(
-            "SELECT * FROM source_videos WHERE sha256 = ?", (sha256,)
+            "SELECT * FROM source_videos WHERE sha256 = ? AND session_id IS ?",
+            (sha256, session_id),
         ).fetchone()
 
-    def find_source_by_url(self, source_url: str) -> sqlite3.Row | None:
+    def find_source_by_url(
+        self, source_url: str, session_id: str | None = None
+    ) -> sqlite3.Row | None:
         """URL-based dedup: platforms re-encode on every download, so the
         same post yields different file hashes — the URL is the stable key."""
         return self.conn.execute(
             "SELECT * FROM source_videos WHERE source_url = ?"
-            " ORDER BY id DESC LIMIT 1",
-            (source_url,),
+            " AND session_id IS ? ORDER BY id DESC LIMIT 1",
+            (source_url, session_id),
         ).fetchone()
 
     def add_source(
         self, *, sha256: str, original_path: str, filename: str,
         duration_s: float, engine: str,
         source_url: str | None = None, title: str | None = None,
-        uploader: str | None = None,
+        uploader: str | None = None, session_id: str | None = None,
     ) -> int:
         cur = self.conn.execute(
             "INSERT INTO source_videos"
             " (sha256, original_path, filename, duration_s, engine,"
-            "  ingested_at, source_url, title, uploader)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  ingested_at, source_url, title, uploader, session_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (sha256, original_path, filename, duration_s, engine, utcnow(),
-             source_url, title, uploader),
+             source_url, title, uploader, session_id),
         )
         self.conn.commit()
         return cur.lastrowid
@@ -171,9 +186,12 @@ class LibraryDB:
 
     # -- effects ---------------------------------------------------------------
 
-    def find_effect_by_hash(self, content_sha256: str) -> sqlite3.Row | None:
+    def find_effect_by_hash(
+        self, content_sha256: str, session_id: str | None = None
+    ) -> sqlite3.Row | None:
         return self.conn.execute(
-            "SELECT * FROM effects WHERE content_sha256 = ?", (content_sha256,)
+            "SELECT * FROM effects WHERE content_sha256 = ? AND session_id IS ?",
+            (content_sha256, session_id),
         ).fetchone()
 
     def add_effect(
@@ -184,17 +202,18 @@ class LibraryDB:
         status: str = "library", quarantine_reason: str | None = None,
         embedding: bytes | None = None, license: str | None = None,
         attribution: str | None = None, derived_from: int | None = None,
+        session_id: str | None = None,
     ) -> int:
         cur = self.conn.execute(
             "INSERT INTO effects (source_id, path, content_sha256, duration_s,"
             " sample_rate, peak_db, start_in_source_s, created_at,"
             " auto_label, label_confidence, status, quarantine_reason,"
-            " embedding, license, attribution, derived_from)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " embedding, license, attribution, derived_from, session_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (source_id, path, content_sha256, duration_s, sample_rate,
              peak_db, start_in_source_s, utcnow(),
              auto_label, label_confidence, status, quarantine_reason,
-             embedding, license, attribution, derived_from),
+             embedding, license, attribution, derived_from, session_id),
         )
         self.conn.commit()
         return cur.lastrowid
@@ -212,24 +231,35 @@ class LibraryDB:
         " FROM effects e JOIN source_videos s ON s.id = e.source_id"
     )
 
-    def list_effects(self, status: str = "library") -> list[sqlite3.Row]:
+    def list_effects(
+        self, status: str = "library", session_id: str | None = None,
+        scoped: bool = False,
+    ) -> list[sqlite3.Row]:
+        """``scoped=True`` filters to one session (public mode); the default
+        is unscoped for local single-user mode."""
+        scope_sql = " AND e.session_id IS ?" if scoped else ""
+        params = (status, session_id) if scoped else (status,)
         return self.conn.execute(
-            f"{self._EFFECT_SELECT} WHERE e.status = ?"
+            f"{self._EFFECT_SELECT} WHERE e.status = ?{scope_sql}"
             " ORDER BY e.created_at DESC, e.id DESC",
-            (status,),
+            params,
         ).fetchall()
 
-    def search_effects(self, query: str) -> list[sqlite3.Row]:
+    def search_effects(
+        self, query: str, session_id: str | None = None, scoped: bool = False,
+    ) -> list[sqlite3.Row]:
         """Case-insensitive substring match across labels, tags, filename,
         and source title/uploader. Library effects only."""
         like = f"%{query}%"
+        scope_sql = " AND e.session_id IS ?" if scoped else ""
+        params = [like] * 7 + ([session_id] if scoped else [])
         return self.conn.execute(
             f"{self._EFFECT_SELECT} WHERE e.status = 'library' AND ("
             " e.auto_label LIKE ? OR e.user_label LIKE ? OR e.tags LIKE ?"
             " OR e.path LIKE ? OR s.title LIKE ? OR s.uploader LIKE ?"
-            " OR s.filename LIKE ?)"
+            f" OR s.filename LIKE ?){scope_sql}"
             " ORDER BY e.created_at DESC, e.id DESC",
-            (like, like, like, like, like, like, like),
+            params,
         ).fetchall()
 
     def get_effect(self, effect_id: int) -> sqlite3.Row | None:

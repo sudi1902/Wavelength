@@ -138,6 +138,7 @@ def import_sound(
     effect_row,
     sound: FreesoundSound,
     preview_path: Path,
+    session_id: str | None = None,
 ) -> Path:
     """Convert a chosen Freesound preview to a 16-bit WAV in the library,
     with license/attribution recorded and a link back to the effect."""
@@ -156,12 +157,12 @@ def import_sound(
         audio, sr = sf.read(wav_tmp, dtype="int16", always_2d=True)
 
     content_hash = hashlib.sha256(audio.tobytes()).hexdigest()
-    existing = db.find_effect_by_hash(content_hash)
+    existing = db.find_effect_by_hash(content_hash, session_id)
     if existing is not None:
         raise SimilarError("This sound is already in your library.")
 
     source_key = f"freesound:{sound.id}"
-    source = db.find_source_by_url(sound.page_url)
+    source = db.find_source_by_url(sound.page_url, session_id)
     source_id = source["id"] if source else db.add_source(
         sha256=hashlib.sha256(source_key.encode()).hexdigest(),
         original_path=sound.page_url,
@@ -171,6 +172,7 @@ def import_sound(
         source_url=sound.page_url,
         title=sound.name,
         uploader=sound.username,
+        session_id=session_id,
     )
 
     label = effect_row["user_label"] or effect_row["auto_label"] or "effect"

@@ -1,0 +1,13 @@
+services:
+  wavelength:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8317:8317"
+    volumes:
+      - ./data:/data
+    environment:
+      # Optional: enables the "find cleaner" Freesound feature for visitors.
+      - WAVELENGTH_FREESOUND_KEY=${WAVELENGTH_FREESOUND_KEY:-}
+    # BandIt CPU inference peaks around 6-8 GB on longer clips.
+    mem_limit: 12g

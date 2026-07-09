@@ -162,6 +162,8 @@ def load_settings(config_path: Path | None = None) -> Settings:
             _apply(settings, tomllib.load(fh))
     if env_lib := os.environ.get("WAVELENGTH_LIBRARY_DIR"):
         settings.library_dir = Path(env_lib).expanduser()
+    if env_cache := os.environ.get("WAVELENGTH_CACHE_DIR"):
+        settings.cache_dir = Path(env_cache).expanduser()
     if env_key := os.environ.get("WAVELENGTH_FREESOUND_KEY"):
         settings.similar.freesound_api_key = env_key
     return settings

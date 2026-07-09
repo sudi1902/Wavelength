@@ -67,6 +67,7 @@ def extract_url(
     separator: Separator | None = None,
     db: LibraryDB | None = None,
     debug: bool = False,
+    session_id: str | None = None,
 ) -> ExtractionResult:
     """Download a video from a URL and run the full pipeline on it.
 
@@ -76,7 +77,7 @@ def extract_url(
     owns_db = db is None
     db = db or LibraryDB(settings.db_path)
     try:
-        existing = db.find_source_by_url(url)
+        existing = db.find_source_by_url(url, session_id)
         if existing is not None and existing["status"] != "failed":
             if not force:
                 result = ExtractionResult(video=Path(url))
@@ -103,7 +104,7 @@ def extract_url(
                 engine=engine, force=force,
                 max_duration_override=max_duration_override,
                 progress=progress, separator=separator, db=db,
-                origin=downloaded, debug=debug,
+                origin=downloaded, debug=debug, session_id=session_id,
             )
     finally:
         if owns_db:
@@ -122,6 +123,7 @@ def extract_video(
     db: LibraryDB | None = None,
     origin: DownloadedVideo | None = None,
     debug: bool = False,
+    session_id: str | None = None,
 ) -> ExtractionResult:
     """Run the full pipeline on one video.
 
@@ -140,7 +142,7 @@ def extract_video(
             video, settings, engine=engine, force=force,
             max_duration_override=max_duration_override,
             progress=progress, separator=separator, db=db, origin=origin,
-            debug=debug,
+            debug=debug, session_id=session_id,
         )
     finally:
         if owns_db:
@@ -201,6 +203,7 @@ def _run(
     separator: Separator | None, db: LibraryDB,
     origin: DownloadedVideo | None = None,
     debug: bool = False,
+    session_id: str | None = None,
 ) -> ExtractionResult:
     result = ExtractionResult(video=video)
 
@@ -215,7 +218,7 @@ def _run(
         )
 
     video_hash = ingest.file_sha256(video)
-    existing = db.find_source(video_hash)
+    existing = db.find_source(video_hash, session_id)
     if existing is not None:
         if existing["status"] == "failed":
             # A crashed run isn't a result — always retry failed videos.
@@ -245,6 +248,7 @@ def _run(
         source_url=origin.url if origin else None,
         title=origin.title if origin else None,
         uploader=origin.uploader if origin else None,
+        session_id=session_id,
     )
 
     try:
@@ -303,7 +307,7 @@ def _run(
             stored = store_effect(
                 cleaned, settings=settings, db=db,
                 source_id=source_id, source_hash=video_hash, index=index,
-                label=label,
+                label=label, session_id=session_id,
             )
             if stored is None:
                 result.duplicates += 1
