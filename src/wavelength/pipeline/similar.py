@@ -38,6 +38,18 @@ class Candidate:
     preview_path: Path
 
 
+@dataclass
+class SimilarResult:
+    queries: list[str]  # what was searched, for display + user steering
+    candidates: list[Candidate]
+
+    @property
+    def weak(self) -> bool:
+        """True when even the best match isn't audibly close — the UI tells
+        the user to steer rather than presenting distant sounds as matches."""
+        return not self.candidates or self.candidates[0].similarity < 0.4
+
+
 def _previews_dir(settings: Settings) -> Path:
     return settings.cache_dir / "freesound-previews"
 
@@ -71,34 +83,78 @@ def effect_embedding(
     return np.frombuffer(blob, dtype=np.float32)
 
 
-def find_similar(
-    settings: Settings, db: LibraryDB, effect_row
-) -> list[Candidate]:
-    cfg = settings.similar
-    query = effect_row["user_label"] or effect_row["auto_label"]
-    if not query or query == "unknown":
-        raise SimilarError(
-            "This effect has no label to search by — rename it first "
-            "(double-click the label), then try again."
-        )
+def _closest_vocab_labels(
+    settings: Settings, reference: np.ndarray, top_n: int = 3
+) -> list[str]:
+    """The SFX vocabulary terms whose text embeddings sit closest to this
+    effect's audio embedding — i.e. what the sound *actually* sounds like,
+    independent of the single stored label (which may be wrong)."""
+    labeler = _require_labeler(settings)
+    try:
+        entries = labeler.text_embeddings()
+    except LabelingError as exc:
+        raise SimilarError(str(exc)) from exc
+    scored = [
+        (float(np.dot(reference, np.asarray(e["embedding"], dtype=np.float32))),
+         e["label"])
+        for e in entries if e["group"] == "sfx"
+    ]
+    scored.sort(reverse=True)
+    return [label for _, label in scored[:top_n]]
 
+
+def find_similar(
+    settings: Settings, db: LibraryDB, effect_row, query: str | None = None
+) -> SimilarResult:
+    """``query`` overrides the automatic search terms (user-steered search)."""
+    cfg = settings.similar
     reference = effect_embedding(settings, db, effect_row)
 
-    duration = float(effect_row["duration_s"])
-    try:
-        sounds = freesound.search(
-            cfg.freesound_api_key,
-            query,
-            min_duration_s=max(0.05, duration * 0.3),
-            max_duration_s=max(2.0, duration * 4.0),
-            licenses=cfg.licenses,
-            limit=cfg.candidates,
-        )
-    except FreesoundError as exc:
-        raise SimilarError(str(exc)) from exc
-    if not sounds:
+    if query:
+        queries = [query.strip()]
+    else:
+        # A single (possibly wrong) label makes a bad candidate pool that
+        # ranking can't rescue. Pool several angles: the user's own label
+        # if set, plus the vocabulary terms closest to the actual audio.
+        queries = []
+        if effect_row["user_label"]:
+            queries.append(effect_row["user_label"])
+        queries.extend(_closest_vocab_labels(settings, reference))
+        seen = set()
+        queries = [
+            q for q in queries
+            if q and q != "unknown" and not (q in seen or seen.add(q))
+        ][:4]
+    if not queries:
         raise SimilarError(
-            f"Freesound has no {'/'.join(cfg.licenses)} results for '{query}'."
+            "Nothing to search by — rename the effect (double-click its "
+            "label) or type a search term, then try again."
+        )
+
+    duration = float(effect_row["duration_s"])
+    per_query = max(8, cfg.candidates // len(queries))
+    sounds_by_id: dict[int, FreesoundSound] = {}
+    errors: list[str] = []
+    for q in queries:
+        try:
+            for sound in freesound.search(
+                cfg.freesound_api_key,
+                q,
+                min_duration_s=max(0.05, duration * 0.25),
+                max_duration_s=min(15.0, max(3.0, duration * 6.0)),
+                licenses=cfg.licenses,
+                limit=per_query,
+            ):
+                sounds_by_id.setdefault(sound.id, sound)
+        except FreesoundError as exc:
+            errors.append(str(exc))
+    sounds = list(sounds_by_id.values())
+    if not sounds:
+        if errors:
+            raise SimilarError(errors[0])
+        raise SimilarError(
+            f"Freesound has no {'/'.join(cfg.licenses)} results for "
+            f"'{' / '.join(queries)}'. Try a different search term."
         )
 
     previews: list[tuple[FreesoundSound, Path]] = []
@@ -129,7 +185,7 @@ def find_similar(
             )
         )
     candidates.sort(key=lambda c: c.similarity, reverse=True)
-    return candidates[: cfg.results]
+    return SimilarResult(queries=queries, candidates=candidates[: cfg.results])
 
 
 def import_sound(

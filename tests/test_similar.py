@@ -114,6 +114,14 @@ class _FakeEmbedder:
             out.append(vec.tobytes())
         return out
 
+    def text_embeddings(self):
+        return [
+            {"label": "whoosh", "group": "sfx", "embedding": [1, 0, 0, 0]},
+            {"label": "pop", "group": "sfx", "embedding": [0, 1, 0, 0]},
+            {"label": "ding", "group": "sfx", "embedding": [0, 0, 1, 0]},
+            {"label": "speech", "group": "other", "embedding": [0, 0, 0, 1]},
+        ]
+
 
 def _effect_row(db, settings, embedding=None, label="whoosh"):
     import soundfile as sf
@@ -131,14 +139,22 @@ def _effect_row(db, settings, embedding=None, label="whoosh"):
     return db.get_effect(eid)
 
 
-def test_find_similar_ranks_by_cosine(settings, monkeypatch, tmp_path):
+def test_find_similar_ranks_by_cosine_and_pools_queries(
+    settings, monkeypatch, tmp_path
+):
     settings.similar.freesound_api_key = "KEY"
 
     sounds = [
         FreesoundSound(1, "far", "a", "CC0", 1.0, "http://cdn/1.mp3", "u1"),
         FreesoundSound(2, "close", "b", "CC0", 1.0, "http://cdn/2.mp3", "u2"),
     ]
-    monkeypatch.setattr(similar_mod.freesound, "search", lambda *a, **k: sounds)
+    searched_queries = []
+
+    def fake_search(key, q, **kwargs):
+        searched_queries.append(q)
+        return sounds  # same pool each query -> dedup by id must apply
+
+    monkeypatch.setattr(similar_mod.freesound, "search", fake_search)
 
     def fake_download(sound, dest):
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -155,19 +171,47 @@ def test_find_similar_ranks_by_cosine(settings, monkeypatch, tmp_path):
     reference[0] = 1.0
     with LibraryDB(settings.db_path) as db:
         row = _effect_row(db, settings, embedding=reference.tobytes())
-        candidates = find_similar(settings, db, row)
+        result = find_similar(settings, db, row)
 
-    assert [c.sound.id for c in candidates] == [2, 1]
-    assert candidates[0].similarity == pytest.approx(1.0)
-    assert candidates[1].similarity == pytest.approx(0.0)
+    # Audio-derived vocabulary terms searched (axis 0 -> whoosh closest),
+    # candidates deduped by id and ranked by cosine.
+    assert "whoosh" in searched_queries
+    assert len(searched_queries) >= 2  # pooled, not single-label
+    assert "whoosh" in result.queries
+    assert [c.sound.id for c in result.candidates] == [2, 1]
+    assert result.candidates[0].similarity == pytest.approx(1.0)
+    assert result.candidates[1].similarity == pytest.approx(0.0)
+    assert not result.weak  # top match is a perfect 1.0
 
 
-def test_find_similar_requires_label(settings, monkeypatch):
+def test_find_similar_query_override_skips_vocab(settings, monkeypatch):
     settings.similar.freesound_api_key = "KEY"
+    searched = []
+
+    def fake_search(key, q, **kwargs):
+        searched.append(q)
+        return [FreesoundSound(9, "s", "u", "CC0", 1.0, "http://cdn/9.mp3", "u9")]
+
+    monkeypatch.setattr(similar_mod.freesound, "search", fake_search)
+    monkeypatch.setattr(
+        similar_mod.freesound, "download_preview",
+        lambda s, d: (d.parent.mkdir(parents=True, exist_ok=True),
+                      d.write_bytes(b"m"), d)[-1],
+    )
+    embedder = _FakeEmbedder({"9.mp3": 3})
+    monkeypatch.setattr(similar_mod, "_require_labeler", lambda s: embedder)
+
+    reference = np.zeros(4, dtype=np.float32)
+    reference[0] = 1.0
     with LibraryDB(settings.db_path) as db:
-        row = _effect_row(db, settings, label=None)
-        with pytest.raises(SimilarError, match="no label"):
-            find_similar(settings, db, row)
+        row = _effect_row(db, settings, embedding=reference.tobytes(),
+                          label=None)
+        result = find_similar(settings, db, row, query="soft whoosh transition")
+
+    assert searched == ["soft whoosh transition"]
+    assert result.queries == ["soft whoosh transition"]
+    # 9.mp3 is orthogonal to the reference -> weak result flagged honestly.
+    assert result.weak
 
 
 def test_embedding_computed_and_persisted_when_missing(settings, monkeypatch):

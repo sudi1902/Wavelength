@@ -631,20 +631,48 @@ async function toggleSimilar(e, card, btn) {
     existing.remove(); card.classList.remove("expanded");
     btn.textContent = "✨ cleaner"; return;
   }
-
   const panel = document.createElement("div");
   panel.className = "similar-panel";
+  card.append(panel);
+  card.classList.add("expanded");
+  await searchSimilar(e, card, btn, panel, "");
+}
+
+async function searchSimilar(e, card, btn, panel, query) {
+  panel.replaceChildren();
   const hint = document.createElement("div");
   hint.className = "hint";
   hint.textContent = "Searching Freesound, ranking by similarity to your sound… (10–30s)";
   panel.append(hint);
-  card.append(panel);
-  card.classList.add("expanded");
   btn.textContent = "…"; btn.disabled = true;
 
   try {
-    const candidates = await api(`/api/effects/${e.id}/similar`);
-    hint.textContent = "Studio versions from Freesound.org, most similar first:";
+    const result = await api(
+      `/api/effects/${e.id}/similar${query ? `?q=${encodeURIComponent(query)}` : ""}`);
+    const candidates = result.candidates;
+
+    // Steering row: show what was searched, let the user re-search.
+    const steer = document.createElement("div");
+    steer.className = "cand";
+    const steerLabel = document.createElement("span");
+    steerLabel.className = "by"; steerLabel.textContent = "searched:";
+    const steerInput = document.createElement("input");
+    steerInput.type = "text";
+    steerInput.value = query || result.queries.join(", ");
+    steerInput.style.cssText =
+      "flex:1;background:var(--surface-2);border:1px solid var(--line);" +
+      "border-radius:8px;padding:4px 10px;color:var(--text);font-size:12px;";
+    const steerBtn = document.createElement("button");
+    steerBtn.className = "chip"; steerBtn.textContent = "search again";
+    const go = () => searchSimilar(e, card, btn, panel, steerInput.value.trim());
+    steerBtn.onclick = go;
+    steerInput.onkeydown = (ev) => { if (ev.key === "Enter") go(); };
+    steer.append(steerLabel, steerInput, steerBtn);
+
+    hint.textContent = result.weak
+      ? "No close matches found — describe the sound in the box below and search again (e.g. \"soft whoosh transition\")."
+      : "Studio versions from Freesound.org, most similar first:";
+    panel.append(steer);
     candidates.forEach(c => {
       const d = document.createElement("div");
       d.className = "cand";

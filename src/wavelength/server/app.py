@@ -258,27 +258,33 @@ def create_app(settings: Settings, public: bool = False) -> FastAPI:
     # -- find cleaner version -------------------------------------------------
 
     @app.get("/api/effects/{effect_id}/similar")
-    def similar(request: Request, effect_id: int):
+    def similar(request: Request, effect_id: int, q: str = ""):
         from wavelength.pipeline.similar import SimilarError, find_similar
 
         with _db() as db:
             row = _get_row(db, effect_id, _sid(request))
             try:
-                candidates = find_similar(settings, db, row)
+                result = find_similar(
+                    settings, db, row, query=q.strip()[:80] or None
+                )
             except SimilarError as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
-        return [
-            {
-                "freesound_id": c.sound.id,
-                "name": c.sound.name,
-                "username": c.sound.username,
-                "license": c.sound.license,
-                "duration_s": c.sound.duration_s,
-                "similarity": round(c.similarity, 3),
-                "page_url": c.sound.page_url,
-            }
-            for c in candidates
-        ]
+        return {
+            "queries": result.queries,
+            "weak": result.weak,
+            "candidates": [
+                {
+                    "freesound_id": c.sound.id,
+                    "name": c.sound.name,
+                    "username": c.sound.username,
+                    "license": c.sound.license,
+                    "duration_s": c.sound.duration_s,
+                    "similarity": round(c.similarity, 3),
+                    "page_url": c.sound.page_url,
+                }
+                for c in result.candidates
+            ],
+        }
 
     @app.get("/api/freesound-preview/{freesound_id}")
     def freesound_preview(freesound_id: int):

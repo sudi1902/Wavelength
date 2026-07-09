@@ -52,7 +52,8 @@ def main():
     spec = json.load(open(sys.argv[1]))
     args = sys.argv[2:]
     embed_only = "--embed-only" in args
-    wavs = [a for a in args if a != "--embed-only"]
+    text_embed = "--text-embed" in args
+    wavs = [a for a in args if a not in ("--embed-only", "--text-embed")]
 
     import numpy as np
     import laion_clap
@@ -62,6 +63,16 @@ def main():
 
     if wavs == ["--selftest"]:
         print(json.dumps({"ok": True}))
+        return
+
+    if text_embed:
+        prompts = spec["prompts"]
+        text_emb = model.get_text_embedding([p["text"] for p in prompts])
+        text_emb = text_emb / np.linalg.norm(text_emb, axis=1, keepdims=True)
+        print(json.dumps([
+            {"label": p["label"], "group": p["group"], "embedding": e.tolist()}
+            for p, e in zip(prompts, text_emb)
+        ]))
         return
 
     audio_emb = model.get_audio_embedding_from_filelist(x=wavs, use_tensor=False)
@@ -157,6 +168,25 @@ class ClapLabeler:
         return [
             np.asarray(r["embedding"], dtype=np.float32).tobytes() for r in raw
         ]
+
+    def text_embeddings(self) -> list[dict]:
+        """Normalized CLAP text embeddings for the whole vocabulary, cached
+        on disk (the vocabulary rarely changes; the model run is ~seconds).
+        Returns [{"label", "group", "embedding": [float,...]}, ...]."""
+        import hashlib
+        import json as _json
+
+        prompts = build_prompts()
+        digest = hashlib.sha256(
+            _json.dumps(prompts, sort_keys=True).encode()
+        ).hexdigest()[:16]
+        cache = self.settings.cache_dir / f"clap-text-emb-{digest}.json"
+        if cache.is_file():
+            return _json.loads(cache.read_text())
+        raw = self._run_worker(["--text-embed"])
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(_json.dumps(raw))
+        return raw
 
     def label(self, wav_paths: list[Path]) -> list[LabelResult]:
         if not wav_paths:
