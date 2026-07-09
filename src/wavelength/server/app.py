@@ -171,6 +171,69 @@ def create_app(settings: Settings) -> FastAPI:
             db.delete_effect(effect_id)
         return {"deleted": effect_id}
 
+    # -- find cleaner version -------------------------------------------------
+
+    @app.get("/api/effects/{effect_id}/similar")
+    def similar(effect_id: int):
+        from wavelength.pipeline.similar import SimilarError, find_similar
+
+        with _db() as db:
+            row = _get_row(db, effect_id)
+            try:
+                candidates = find_similar(settings, db, row)
+            except SimilarError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+        return [
+            {
+                "freesound_id": c.sound.id,
+                "name": c.sound.name,
+                "username": c.sound.username,
+                "license": c.sound.license,
+                "duration_s": c.sound.duration_s,
+                "similarity": round(c.similarity, 3),
+                "page_url": c.sound.page_url,
+            }
+            for c in candidates
+        ]
+
+    @app.get("/api/freesound-preview/{freesound_id}")
+    def freesound_preview(freesound_id: int):
+        path = settings.cache_dir / "freesound-previews" / f"{freesound_id}.mp3"
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Preview not cached")
+        return FileResponse(path, media_type="audio/mpeg")
+
+    class ImportRequest(BaseModel):
+        freesound_id: int
+        name: str
+        username: str
+        license: str
+        duration_s: float
+        page_url: str
+
+    @app.post("/api/effects/{effect_id}/import-similar")
+    def import_similar(effect_id: int, body: ImportRequest):
+        from wavelength.pipeline.similar import SimilarError, import_sound
+        from wavelength.sources.freesound import FreesoundSound
+
+        preview = (
+            settings.cache_dir / "freesound-previews" / f"{body.freesound_id}.mp3"
+        )
+        if not preview.is_file():
+            raise HTTPException(status_code=404, detail="Preview not cached")
+        sound = FreesoundSound(
+            id=body.freesound_id, name=body.name, username=body.username,
+            license=body.license, duration_s=body.duration_s,
+            preview_url="", page_url=body.page_url,
+        )
+        with _db() as db:
+            row = _get_row(db, effect_id)
+            try:
+                path = import_sound(settings, db, row, sound, preview)
+            except SimilarError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+        return {"imported": path.name}
+
     # -- extraction jobs ----------------------------------------------------
 
     @app.post("/api/jobs")

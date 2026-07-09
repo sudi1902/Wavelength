@@ -85,6 +85,22 @@ class LabelingConfig:
 
 
 @dataclass
+class SimilarConfig:
+    """'Find cleaner version': Freesound search + CLAP similarity ranking."""
+
+    # Free key from https://freesound.org/apiv2/apply (also settable via the
+    # WAVELENGTH_FREESOUND_KEY environment variable).
+    freesound_api_key: str = ""
+    # Licenses to include. cc0 = no strings; by = credit the author;
+    # by-nc = non-commercial only (off by default: these are for videos).
+    licenses: list = field(default_factory=lambda: ["cc0", "by"])
+    # How many Freesound results to fetch and embed for ranking, and how
+    # many ranked candidates to show.
+    candidates: int = 24
+    results: int = 8
+
+
+@dataclass
 class Settings:
     library_dir: Path = field(
         default_factory=lambda: Path("~/SoundEffectsLibrary").expanduser()
@@ -99,6 +115,7 @@ class Settings:
     segmentation: SegmentationConfig = field(default_factory=SegmentationConfig)
     cleaning: CleaningConfig = field(default_factory=CleaningConfig)
     labeling: LabelingConfig = field(default_factory=LabelingConfig)
+    similar: SimilarConfig = field(default_factory=SimilarConfig)
 
     @property
     def effects_dir(self) -> Path:
@@ -145,4 +162,6 @@ def load_settings(config_path: Path | None = None) -> Settings:
             _apply(settings, tomllib.load(fh))
     if env_lib := os.environ.get("WAVELENGTH_LIBRARY_DIR"):
         settings.library_dir = Path(env_lib).expanduser()
+    if env_key := os.environ.get("WAVELENGTH_FREESOUND_KEY"):
+        settings.similar.freesound_api_key = env_key
     return settings

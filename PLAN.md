@@ -268,7 +268,7 @@ existing pipeline unchanged.
   the main flow); menu-bar launcher
 - **Exit criteria:** AirDrop a video from the phone → effects appear in the library UI, previewable, within a minute, no terminal touched
 
-### Phase 3.5 — "Find cleaner version" (next)
+### Phase 3.5 — "Find cleaner version" ✅
 - Store CLAP audio embeddings per effect (extend the clap worker)
 - Freesound.org client: text search by label + duration filter → candidates
 - Re-rank candidate previews by CLAP embedding similarity to the extracted sound

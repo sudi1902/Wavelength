@@ -90,6 +90,20 @@
   .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
     background: var(--panel2); border: 1px solid var(--accent); color: var(--text);
     border-radius: 8px; padding: 8px 18px; z-index: 10; }
+
+  .similar-panel { margin-top: 10px; border-top: 1px dashed var(--line);
+    padding-top: 10px; }
+  .similar-panel .hint { color: var(--dim); font-size: 11px; margin-bottom: 6px; }
+  .cand { display: flex; align-items: center; gap: 10px; padding: 5px 6px;
+    border-radius: 8px; font-size: 12.5px; }
+  .cand:hover { background: var(--panel2); }
+  .cand .play { width: 26px; height: 26px; font-size: 11px; }
+  .cand .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; max-width: 320px; }
+  .cand .sim { color: var(--good); min-width: 44px; text-align: right; }
+  .lic { border-radius: 999px; padding: 0 8px; font-size: 10.5px;
+    border: 1px solid var(--line); color: var(--dim); }
+  .lic.cc0 { color: var(--good); border-color: var(--good); }
 </style>
 </head>
 <body>
@@ -279,6 +293,15 @@ function effectRow(e) {
 
   const actions = document.createElement("div");
   actions.className = "actions";
+
+  if (e.status === "library") {
+    const cleaner = document.createElement("button");
+    cleaner.className = "small"; cleaner.textContent = "✨ find cleaner";
+    cleaner.title = "Search Freesound for studio-quality versions of this sound";
+    cleaner.onclick = () => toggleSimilar(e, row, cleaner);
+    actions.append(cleaner);
+  }
+
   const dlWav = document.createElement("a");
   dlWav.href = `/api/effects/${e.id}/download`;
   dlWav.innerHTML = '<button class="small">wav</button>';
@@ -356,6 +379,88 @@ async function refreshList() {
     }
     effects.forEach(e => list.append(effectRow(e)));
   } catch (err) { toast(err.message); }
+}
+
+// ---------- find cleaner version ----------
+async function toggleSimilar(e, row, btn) {
+  const existing = row.querySelector(".similar-panel");
+  if (existing) { existing.remove(); btn.textContent = "✨ find cleaner"; return; }
+
+  const panel = document.createElement("div");
+  panel.className = "similar-panel";
+  const hint = document.createElement("div");
+  hint.className = "hint";
+  hint.textContent = "Searching Freesound and ranking by similarity… (10–30s)";
+  panel.append(hint);
+  row.append(panel);
+  btn.textContent = "…";
+  btn.disabled = true;
+
+  try {
+    const candidates = await api(`/api/effects/${e.id}/similar`);
+    hint.textContent =
+      "Cleaner versions from Freesound.org, ranked by similarity to your sound:";
+    candidates.forEach(c => {
+      const d = document.createElement("div");
+      d.className = "cand";
+
+      const play = document.createElement("button");
+      play.className = "play"; play.textContent = "▶";
+      play.onclick = () => {
+        stopCurrent();
+        const audio = new Audio(`/api/freesound-preview/${c.freesound_id}`);
+        audio.onended = stopCurrent;
+        audio.play();
+        play.classList.add("playing"); play.textContent = "◼";
+        current = { audio, btn: play };
+      };
+
+      const sim = document.createElement("span");
+      sim.className = "sim";
+      sim.textContent = `${Math.round(c.similarity * 100)}%`;
+
+      const name = document.createElement("a");
+      name.className = "name"; name.textContent = c.name;
+      name.href = c.page_url; name.target = "_blank"; name.rel = "noreferrer";
+
+      const by = document.createElement("span");
+      by.className = "meta"; by.textContent = `by ${c.username} · ${c.duration_s.toFixed(1)}s`;
+
+      const lic = document.createElement("span");
+      lic.className = "lic" + (c.license === "CC0" ? " cc0" : "");
+      lic.textContent = c.license;
+      lic.title = c.license === "CC0"
+        ? "Public domain — no credit required"
+        : "Free to use — credit the author in your video description";
+
+      const grow = document.createElement("div"); grow.className = "grow";
+
+      const add = document.createElement("button");
+      add.className = "small"; add.textContent = "add to library";
+      add.onclick = async () => {
+        add.disabled = true; add.textContent = "adding…";
+        try {
+          await post(`/api/effects/${e.id}/import-similar`, c);
+          add.textContent = "✓ added";
+          toast("Added to library" +
+            (c.license !== "CC0" ? " — remember to credit " + c.username : ""));
+          refreshList(); refreshStatus();
+        } catch (err) {
+          add.disabled = false; add.textContent = "add to library";
+          toast(err.message);
+        }
+      };
+
+      d.append(play, sim, name, by, lic, grow, add);
+      panel.append(d);
+    });
+    btn.textContent = "hide";
+  } catch (err) {
+    hint.textContent = err.message;
+    btn.textContent = "✨ find cleaner";
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ---------- jobs ----------

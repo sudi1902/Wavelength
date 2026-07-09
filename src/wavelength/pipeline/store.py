@@ -92,6 +92,7 @@ def store_effect(
         label_confidence=label.confidence if label else None,
         status="quarantine" if quarantined else "library",
         quarantine_reason=label.quarantine_reason if label else None,
+        embedding=label.embedding if label else None,
     )
     return StoredEffect(path=path, duplicate=False, quarantined=quarantined)
 

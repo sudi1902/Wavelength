@@ -32,10 +32,13 @@ class LabelResult:
     confidence: float  # probability of the best SFX label
     quarantine: bool
     quarantine_reason: str | None  # e.g. "speech 0.62"
+    embedding: bytes | None = None  # normalized CLAP embedding, float32 bytes
 
 
 # The worker runs inside the clap venv. It loads the model once, embeds all
-# prompts and all wav files, and prints per-file group-best scores as JSON.
+# prompts and all wav files, and prints per-file group-best scores plus the
+# audio embedding as JSON. With --embed-only it skips the prompts and returns
+# embeddings alone (used for similarity search).
 # Softmax over similarity*100 follows the standard CLIP/CLAP zero-shot recipe.
 CLAP_WORKER = '''\
 import json
@@ -47,7 +50,9 @@ warnings.filterwarnings("ignore")
 
 def main():
     spec = json.load(open(sys.argv[1]))
-    wavs = sys.argv[2:]
+    args = sys.argv[2:]
+    embed_only = "--embed-only" in args
+    wavs = [a for a in args if a != "--embed-only"]
 
     import numpy as np
     import laion_clap
@@ -59,16 +64,20 @@ def main():
         print(json.dumps({"ok": True}))
         return
 
+    audio_emb = model.get_audio_embedding_from_filelist(x=wavs, use_tensor=False)
+    audio_emb = audio_emb / np.linalg.norm(audio_emb, axis=1, keepdims=True)
+
+    if embed_only:
+        print(json.dumps([{"embedding": e.tolist()} for e in audio_emb]))
+        return
+
     prompts = spec["prompts"]
     text_emb = model.get_text_embedding([p["text"] for p in prompts])
-    audio_emb = model.get_audio_embedding_from_filelist(x=wavs, use_tensor=False)
-
     text_emb = text_emb / np.linalg.norm(text_emb, axis=1, keepdims=True)
-    audio_emb = audio_emb / np.linalg.norm(audio_emb, axis=1, keepdims=True)
     sims = audio_emb @ text_emb.T
 
     results = []
-    for row in sims:
+    for row, emb in zip(sims, audio_emb):
         logits = row * 100.0
         probs = np.exp(logits - logits.max())
         probs = probs / probs.sum()
@@ -77,6 +86,7 @@ def main():
             group = p["group"]
             if group not in best or prob > best[group]["prob"]:
                 best[group] = {"label": p["label"], "prob": float(prob)}
+        best["embedding"] = emb.tolist()
         results.append(best)
     print(json.dumps(results))
 
@@ -137,15 +147,29 @@ class ClapLabeler:
         (self.venv_dir / ".model-ok").touch()
         print("[clap] Ready.")
 
+    def embed(self, wav_paths: list[Path]) -> list[bytes]:
+        """Normalized CLAP audio embeddings as float32 bytes, one per file."""
+        if not wav_paths:
+            return []
+        import numpy as np
+
+        raw = self._run_worker(["--embed-only", *[str(p) for p in wav_paths]])
+        return [
+            np.asarray(r["embedding"], dtype=np.float32).tobytes() for r in raw
+        ]
+
     def label(self, wav_paths: list[Path]) -> list[LabelResult]:
         if not wav_paths:
             return []
+        import numpy as np
+
         cfg = self.settings.labeling
         raw = self._run_worker([str(p) for p in wav_paths])
         results = []
         for best in raw:
             sfx = best.get("sfx", {"label": "unknown", "prob": 0.0})
             other = best.get("other", {"label": "", "prob": 0.0})
+            embedding = best.get("embedding")
             quarantine = (
                 cfg.quarantine_enabled
                 and other["prob"] > sfx["prob"]
@@ -159,6 +183,10 @@ class ClapLabeler:
                     quarantine=quarantine,
                     quarantine_reason=(
                         f"{other['label']} {other['prob']:.2f}" if quarantine else None
+                    ),
+                    embedding=(
+                        np.asarray(embedding, dtype=np.float32).tobytes()
+                        if embedding else None
                     ),
                 )
             )

@@ -76,6 +76,30 @@ Watch mode also works headless, without the UI:
 wavelength watch ~/Downloads
 ```
 
+## Find cleaner versions (Freesound)
+
+Extracted sounds carry TikTok compression and separation artifacts; studio
+recordings of the same sound are sharper. Each library effect has a
+**✨ find cleaner** button that searches [Freesound.org](https://freesound.org)
+and ranks results by *actual audio similarity* to your clip (CLAP
+embeddings), so you get "sounds like THIS whoosh," not just any whoosh.
+Listen side by side, then add the ones you like to your library — license
+and author attribution are stored with every import (CC0 and CC-BY by
+default; CC-BY means credit the author in your video description).
+
+One-time setup: get a free API key at
+[freesound.org/apiv2/apply](https://freesound.org/apiv2/apply) and add it to
+`~/.config/wavelength/config.toml`:
+
+```toml
+[similar]
+freesound_api_key = "YOUR_KEY"
+```
+
+Requires the CLAP model (`wavelength setup clap`). Imports use Freesound's
+HQ previews (128 kbps mp3 → WAV); full-quality originals need OAuth and are
+planned.
+
 ## Managing the library
 
 ```bash

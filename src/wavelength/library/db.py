@@ -66,6 +66,13 @@ MIGRATIONS = [
     ("effects", "quarantine_reason", "TEXT"),
     # Phase 3
     ("effects", "favorite", "INTEGER NOT NULL DEFAULT 0"),
+    # Phase 3.5: CLAP audio embedding (float32 bytes) for similarity search;
+    # license/attribution for sounds imported from Freesound; derived_from
+    # links an imported sound to the extracted effect it replaces/augments.
+    ("effects", "embedding", "BLOB"),
+    ("effects", "license", "TEXT"),
+    ("effects", "attribution", "TEXT"),
+    ("effects", "derived_from", "INTEGER"),
 ]
 
 
@@ -175,18 +182,29 @@ class LibraryDB:
         start_in_source_s: float | None,
         auto_label: str | None = None, label_confidence: float | None = None,
         status: str = "library", quarantine_reason: str | None = None,
+        embedding: bytes | None = None, license: str | None = None,
+        attribution: str | None = None, derived_from: int | None = None,
     ) -> int:
         cur = self.conn.execute(
             "INSERT INTO effects (source_id, path, content_sha256, duration_s,"
             " sample_rate, peak_db, start_in_source_s, created_at,"
-            " auto_label, label_confidence, status, quarantine_reason)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " auto_label, label_confidence, status, quarantine_reason,"
+            " embedding, license, attribution, derived_from)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (source_id, path, content_sha256, duration_s, sample_rate,
              peak_db, start_in_source_s, utcnow(),
-             auto_label, label_confidence, status, quarantine_reason),
+             auto_label, label_confidence, status, quarantine_reason,
+             embedding, license, attribution, derived_from),
         )
         self.conn.commit()
         return cur.lastrowid
+
+    def set_embedding(self, effect_id: int, embedding: bytes) -> None:
+        self.conn.execute(
+            "UPDATE effects SET embedding = ? WHERE id = ?",
+            (embedding, effect_id),
+        )
+        self.conn.commit()
 
     _EFFECT_SELECT = (
         "SELECT e.*, s.filename AS source_filename, s.title AS source_title,"
