@@ -160,6 +160,79 @@ def setup(
 
 
 @app.command()
+def serve(
+    port: int = typer.Option(8317, help="Port to serve the library UI on"),
+    no_browser: bool = typer.Option(
+        False, "--no-browser", help="Don't open the browser automatically"
+    ),
+    library_dir: Path = typer.Option(None, help="Override library location"),
+):
+    """Start the library web UI at http://localhost:PORT."""
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    from wavelength.server.app import create_app
+
+    settings = _settings(library_dir)
+    url = f"http://127.0.0.1:{port}"
+    console.print(f"Wavelength UI: [bold cyan]{url}[/]  (Ctrl+C to stop)")
+    if not no_browser:
+        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    uvicorn.run(create_app(settings), host="127.0.0.1", port=port,
+                log_level="warning")
+
+
+@app.command()
+def watch(
+    folder: Path = typer.Argument(
+        Path("~/Downloads"), help="Folder to watch for new videos"
+    ),
+    engine: str = typer.Option(None, help="Separation engine override"),
+    library_dir: Path = typer.Option(None, help="Override library location"),
+):
+    """Watch a folder and auto-extract every new video that lands in it."""
+    import time as _time
+
+    from wavelength.pipeline.runner import extract_video as _extract
+    from wavelength.watch import VideoWatcher
+
+    settings = _settings(library_dir)
+    separator = get_separator(settings, engine)
+
+    def on_video(path: Path) -> None:
+        console.print(f"[bold]{path.name}[/] [dim](watch)[/]")
+        try:
+            result = _extract(
+                path, settings, separator=separator,
+                progress=lambda m: console.print(f"  [dim]{m}[/]"),
+            )
+            if not result.already_processed:
+                console.print(
+                    f"  [bold green]{result.effect_count} effect(s) saved[/]"
+                )
+        except (IngestError, PipelineError, SeparationError) as exc:
+            err_console.print(f"  [red]error:[/] {exc}")
+
+    watcher = VideoWatcher(folder.expanduser(), on_video)
+    try:
+        watcher.start()
+    except FileNotFoundError as exc:
+        err_console.print(f"[red]{exc}[/]")
+        raise typer.Exit(code=1)
+    console.print(
+        f"Watching [bold]{watcher.folder}[/] for new videos (Ctrl+C to stop)"
+    )
+    try:
+        while True:
+            _time.sleep(1)
+    except KeyboardInterrupt:
+        watcher.stop()
+        console.print("Stopped.")
+
+
+@app.command()
 def info():
     """Show configuration and engine readiness."""
     settings = load_settings()

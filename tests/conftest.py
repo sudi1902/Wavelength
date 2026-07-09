@@ -61,6 +61,7 @@ def settings(tmp_path: Path) -> Settings:
 
 def make_video(path: Path, audio: np.ndarray, sr: int = SR) -> Path:
     """Mux synthetic audio with a black video track into an mp4."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     wav = path.with_suffix(".src.wav")
     sf.write(wav, audio, sr)
     duration = len(audio) / sr

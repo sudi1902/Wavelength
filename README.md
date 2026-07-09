@@ -57,6 +57,25 @@ With the labeler installed, effects come out *named* — `...__whoosh-01.wav`,
 separator are diverted to `quarantine/` for review instead of polluting the
 library. Without it, extraction still works; effects are just unlabeled.
 
+## The web UI
+
+```bash
+wavelength serve
+```
+
+Opens `http://localhost:8317`: browse the library with waveform previews and
+one-click play, search as you type, rename (double-click a label), tag,
+favorite, delete, download WAV/MP3, review and promote quarantined effects,
+paste a TikTok/Instagram link straight into the extract box, and toggle
+**watch mode** to auto-extract every video that lands in `~/Downloads`
+(AirDrop from your iPhone included).
+
+Watch mode also works headless, without the UI:
+
+```bash
+wavelength watch ~/Downloads
+```
+
 ## Managing the library
 
 ```bash

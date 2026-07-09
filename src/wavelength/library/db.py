@@ -64,6 +64,8 @@ MIGRATIONS = [
     # Phase 2: 'library' or 'quarantine' (speech/music bleed under review)
     ("effects", "status", "TEXT NOT NULL DEFAULT 'library'"),
     ("effects", "quarantine_reason", "TEXT"),
+    # Phase 3
+    ("effects", "favorite", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
@@ -241,6 +243,13 @@ class LibraryDB:
             self.conn.execute(
                 "UPDATE effects SET status = ? WHERE id = ?", (status, effect_id)
             )
+        self.conn.commit()
+
+    def set_favorite(self, effect_id: int, favorite: bool) -> None:
+        self.conn.execute(
+            "UPDATE effects SET favorite = ? WHERE id = ?",
+            (1 if favorite else 0, effect_id),
+        )
         self.conn.commit()
 
     def delete_effect(self, effect_id: int) -> None:

@@ -255,13 +255,25 @@ existing pipeline unchanged.
   long inputs internally; Bandit-v2 A/B experiment still pending
 - **Exit criteria:** effects come out named ("whoosh-01.wav"), junk rate low enough that you rarely delete manually
 
-### Phase 3 — Library UI + automation
-- FastAPI server + web UI: browse/search/filter, waveform preview with instant play,
-  rename, tag, favorite, delete, drag-out/export, quarantine review
-- Watch-folder mode (`sfx watch ~/Downloads`) with the stabilization logic; toggle in UI
-- Photos-library ingestion (`sfx photos --recent 20` / album picker) via osxphotos
-- Menu-bar launcher (`sfx serve` autostart) — optional nicety
+### Phase 3 — Library UI + automation ✅ (core shipped)
+- `wavelength serve` — FastAPI + self-contained web UI at localhost:8317:
+  browse with canvas waveforms and instant play, search-as-you-type,
+  double-click rename, tag chips, favorites, delete, WAV/MP3 download,
+  quarantine tab with promote, paste-a-link extract box with live job
+  progress, watch-folder toggle
+- Background job queue (single worker, separator reused across jobs)
+- `wavelength watch ~/Downloads` — headless watcher; download-stabilization
+  (2 s quiet period, ignores .part/.crdownload temp files)
+- Deferred: Photos-library ingestion via osxphotos (AirDrop→Downloads covers
+  the main flow); menu-bar launcher
 - **Exit criteria:** AirDrop a video from the phone → effects appear in the library UI, previewable, within a minute, no terminal touched
+
+### Phase 3.5 — "Find cleaner version" (next)
+- Store CLAP audio embeddings per effect (extend the clap worker)
+- Freesound.org client: text search by label + duration filter → candidates
+- Re-rank candidate previews by CLAP embedding similarity to the extracted sound
+- UI panel: side-by-side listening, license/attribution display (default CC0),
+  keep-mine / take-this / keep-both
 
 ---
 
