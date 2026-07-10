@@ -63,6 +63,24 @@ library. Without it, extraction still works; effects are just unlabeled.
 wavelength serve
 ```
 
+### One-word launcher (optional)
+
+Tired of `cd` + `source` + `serve` every time? Install a `wavelength-app`
+command once:
+
+```bash
+bash scripts/install-launcher.sh
+```
+
+Then, from **any** terminal, just:
+
+```bash
+wavelength-app            # starts the app (sets up the venv on first run)
+wavelength-app --update   # pulls the latest code first, then starts
+```
+
+Stop it with Ctrl+C, like any server.
+
 Opens `http://localhost:8317`: browse the library with waveform previews and
 one-click play, search as you type, rename (double-click a label), tag,
 favorite, delete, download WAV/MP3, review and promote quarantined effects,
