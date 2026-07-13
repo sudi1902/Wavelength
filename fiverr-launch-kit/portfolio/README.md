@@ -12,13 +12,15 @@ All assets live in your Higgsfield account (higgsfield.ai → History / Marketin
 
 ## Ad videos (1080p, 9:16, ~15s, with audio)
 
-Find under Marketing Studio history. Video links to be appended when renders complete.
+Also visible under Marketing Studio history in the Higgsfield app.
 
-| Sample | Preset | Job ID | Use as |
-|---|---|---|---|
-| Skincare showcase | Product Showcase | `bda51486-bfb5-4f5c-8a2d-6be736553b96` | **Main gig video** (best first impression) |
-| Sneaker hyper-motion | Hyper Motion | `0df358f7-2deb-451b-aeaf-247bfea4bf05` | Gallery video 2 |
-| Coffee TV spot | TV Spot | `271562bd-01db-40ea-abd8-5140b0ac4890` | Gallery video 3 |
+| Sample | Preset | Job ID | Use as | Direct link |
+|---|---|---|---|---|
+| Skincare showcase | Product Showcase | `bda51486-bfb5-4f5c-8a2d-6be736553b96` | **Main gig video** (best first impression) | https://d8j0ntlcm91z4.cloudfront.net/user_3DThAEck6oFEzyJnDAdgfCNWefs/hf_20260713_170509_bda51486-bfb5-4f5c-8a2d-6be736553b96.mp4 |
+| Sneaker hyper-motion | Hyper Motion | `0df358f7-2deb-451b-aeaf-247bfea4bf05` | Gallery video 2 | https://d8j0ntlcm91z4.cloudfront.net/user_3DThAEck6oFEzyJnDAdgfCNWefs/hf_20260713_170513_0df358f7-2deb-451b-aeaf-247bfea4bf05.mp4 |
+| Coffee TV spot | TV Spot | `6dfead5a-a420-4739-9224-3e95b829e881` | Gallery video 3 | (fetch from Marketing Studio history when render completes) |
+
+Note: the first coffee attempt (`271562bd`) was blocked by a false-positive content filter (auto-storyboard added barista hands); credits were auto-refunded and it was regenerated as a no-people pure-product film.
 
 ## Fictional brands used (safe for portfolio)
 LUMIÈRE No.7, VELOCE, EMBER & OAK — all invented for these samples. Label them "spec work / demo brand" in the gig gallery captions to stay honest and ToS-safe.
