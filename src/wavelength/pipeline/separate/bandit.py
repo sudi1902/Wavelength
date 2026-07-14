@@ -178,13 +178,14 @@ class BanditSeparator(Separator):
         )
         if result.returncode != 0:
             raise SeparationError(f"venv creation failed:\n{result.stderr.strip()}")
-        # Python 3.12+ venvs no longer bundle setuptools, but MSST's librosa
-        # imports pkg_resources (provided by setuptools) at load time. Install
-        # it explicitly, alongside a current pip/wheel.
+        # MSST's librosa imports pkg_resources at load time. That module is
+        # provided by setuptools — but (a) Python 3.12+ venvs no longer
+        # bundle setuptools, and (b) setuptools 81+ REMOVED pkg_resources.
+        # Pin <81 so the module is actually present.
         result = subprocess.run(
             [
                 str(self.venv_python), "-m", "pip", "install", "--quiet",
-                "--upgrade", "pip", "setuptools", "wheel",
+                "--upgrade", "pip", "wheel", "setuptools<81",
             ],
             capture_output=True, text=True,
         )
