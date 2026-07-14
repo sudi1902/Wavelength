@@ -178,6 +178,20 @@ class BanditSeparator(Separator):
         )
         if result.returncode != 0:
             raise SeparationError(f"venv creation failed:\n{result.stderr.strip()}")
+        # Python 3.12+ venvs no longer bundle setuptools, but MSST's librosa
+        # imports pkg_resources (provided by setuptools) at load time. Install
+        # it explicitly, alongside a current pip/wheel.
+        result = subprocess.run(
+            [
+                str(self.venv_python), "-m", "pip", "install", "--quiet",
+                "--upgrade", "pip", "setuptools", "wheel",
+            ],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise SeparationError(
+                "Preparing the venv failed:\n" + result.stderr.strip()[-2000:]
+            )
         result = subprocess.run(
             [
                 str(self.venv_python), "-m", "pip", "install", "--quiet",

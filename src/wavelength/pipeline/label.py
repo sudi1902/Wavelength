@@ -138,10 +138,13 @@ class ClapLabeler:
         if not (self.venv_dir / ".deps-ok").is_file():
             print("[clap] Installing CLAP and PyTorch (one-time, several "
                   "minutes) ...")
+            # setuptools: Python 3.12+ venvs omit it, but laion_clap's librosa
+            # imports pkg_resources (from setuptools) at load time.
             # torch/torchaudio/torchvision are undeclared laion_clap deps —
             # it imports them but doesn't require them at install time.
             result = subprocess.run(
                 [str(self.venv_python), "-m", "pip", "install", "--quiet",
+                 "--upgrade", "pip", "setuptools", "wheel",
                  "laion_clap", "torch", "torchaudio", "torchvision"],
                 capture_output=True, text=True,
             )
